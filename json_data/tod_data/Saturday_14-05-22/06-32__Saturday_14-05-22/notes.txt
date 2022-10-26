@@ -1,0 +1,2 @@
+Check video between first six and last six runs. May have been shading the unit
+slightly (unlikely).

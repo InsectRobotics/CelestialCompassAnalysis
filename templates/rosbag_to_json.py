@@ -14,9 +14,10 @@ import numpy as np
 import json
 import argparse
 
-def rosbag_to_json(infile, outfile):
-    print("Input: {}".format(infile))
-    print("Output: {}".format(outfile))
+def rosbag_to_json(infile, outfile,verbose=True):
+    if verbose:
+        print("Input: {}".format(infile))
+        print("Output: {}".format(outfile))
 
     bag = rosbag.Bag(infile)
 
@@ -59,7 +60,8 @@ def rosbag_to_json(infile, outfile):
     with open(outfile, "w") as f:
         json.dump(data_dictionary, f)
 
-    print("Topics saved: {}".format(list(data_dictionary.keys())))
+    if verbose:
+        print("Topics saved: {}".format(list(data_dictionary.keys())))
 
 
 if __name__ == "__main__":
