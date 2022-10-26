@@ -1,0 +1,3 @@
+Series of runs following on from Thursday 12th. To see if the readings are
+consistently worse in the evening with finer granularity. Readings are taken
+every half hour from 1800 to 2100 (no data is expected at 2100).
