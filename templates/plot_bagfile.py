@@ -1,21 +1,28 @@
+"""
+plot_json.py
+
+Produce a Figure from a recording session where each recording is stored as a
+rosbag file.
+"""
+
+import rosbag
 import matplotlib.pyplot as plt
 import numpy as np
-import json
 import argparse
 import os
 import sys
 from scipy.stats import circmean
 
 import plot_from_dict as pfd
+from rosbag_to_json import rosbag_to_dict
 
-def plot_json(session, outfile=None):
-        """
+def plot_bagfile(session, outfile=None):
+    """
     Produce a figure along with a local output filename. For the output filename
     the caller must specify any preceeding directory structure, otherwise the
     output file will be relative to the calling directory.
 
-    :param session: A directory containing json files, translated from a
-                    recording session.
+    :param session: A directory containing bagfiles from a recording session.
     :param outfile: A specified output filename. If None, the timestamped
                     sky image filename will be used. If there is no image, then
                     the lowest level session directory name will be used. If
@@ -23,6 +30,7 @@ def plot_json(session, outfile=None):
                     supported by matplotlib).
     :returns: A Figure and the local filename.
     """
+
     #
     # Pull in data
     #
@@ -33,12 +41,11 @@ def plot_json(session, outfile=None):
     calling_dir = os.getcwd()
     os.chdir(session)
     imagefile = [x for x in os.listdir() if ".jpg" in x]
-    recordings = [x for x in os.listdir() if ".json" in x]
+    recordings = [x for x in os.listdir() if ".bag" in x]
 
     if len(recordings) == 0:
-        print("There are no json files in the specified directory.")
+        print("There are no rosbag files in the specified directory.")
         sys.exit()
-
 
     if len(imagefile) == 0:
         print("Warning: missing sky image file from the session directory.")
@@ -58,12 +65,15 @@ def plot_json(session, outfile=None):
         print(session_path)
         outfile = session_path[len(session_path) - 2] + ".pdf"
 
+
+    #
+    # Read in relevant rosbag data and pack into dictionary.
+    #
     # Pull all recordings into dictionary
     full_data = dict()
     for r in recordings:
-        with open(r) as f:
-            rec_data = json.load(f)
-
+        bag = rosbag.Bag(r)
+        rec_data = rosbag_to_dict(bag)
         full_data[r] = rec_data
 
     full_data["image_filename"] = imagefile
@@ -89,7 +99,7 @@ if __name__=="__main__":
     session = args.session
     outfile = args.output
 
-    fig, outfile = plot_json(session, outfile=outfile)
+    fig, outfile = plot_bagfile(session, outfile=outfile)
 
     # Save files relative to calling directory unless absolute
     # path is specified.

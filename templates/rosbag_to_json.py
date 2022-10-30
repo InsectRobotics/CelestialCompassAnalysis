@@ -4,23 +4,23 @@ rosbag_to_json.py
 Takes a rosbag as an input file, extracts relevant topics (all pol_op data
 and yaw), packs the data into a dictionary and outputs a json file.
 
-Requires rosbag to be installed and requires std_msgs (which requires at least
-some components of ROS to be installed).
+Requires rosbag and numpy.
 """
-
 import rosbag
-from std_msgs.msg import Int32MultiArray, Float64
 import numpy as np
 import json
 import argparse
 
-def rosbag_to_json(infile, outfile,verbose=True):
-    if verbose:
-        print("Input: {}".format(infile))
-        print("Output: {}".format(outfile))
+def rosbag_to_dict(bag):
+    """
+    Extract the relevant messages from a rosbag file and store them in a
+    dictionary. The dictionary has one key per topic, and each topic contains
+    all message data recorded on that topic. Pol op preferred angles are also
+    included for completeness.
 
-    bag = rosbag.Bag(infile)
-
+    :param bag: a rosbag (note not a filename, the actual bag object)
+    :returns: a dictionary containing the recorded data
+    """
     # Simplistic but works
     po = [[],[],[],[],[],[],[],[]]
     yaw = []
@@ -42,8 +42,8 @@ def rosbag_to_json(infile, outfile,verbose=True):
     # po[x] -> recorded data for pol-op unit x
     # po[x][y] -> pol-op x at time y
     # po[x][y][z] -> pol-op x, time y, photodiode z
-    # Absolute value is taken as some photodiodes return negative
-    # values. Using the absolute values gives the correct sensor output.
+    # Absolute value is taken as some photodiodes return negative values. Using
+    # the absolute values gives the correct sensor output.
     po = np.abs(po).tolist()
 
     # Azimuths for each pol-op unit. po_az[i] corresponds
@@ -56,6 +56,22 @@ def rosbag_to_json(infile, outfile,verbose=True):
 
     data_dictionary["azimuths"] = po_az
     data_dictionary["yaw"] = yaw
+
+    return data_dictionary
+
+
+def rosbag_to_json(infile, outfile,verbose=True):
+    """
+    Given a rosbag file as input, create a dictionary containing all
+    recorded messages for the relevant topics then store this in json
+    format
+    """
+    if verbose:
+        print("Input: {}".format(infile))
+        print("Output: {}".format(outfile))
+
+    bag = rosbag.Bag(infile)
+    data_dictionary = rosbag_to_dict(bag)
 
     with open(outfile, "w") as f:
         json.dump(data_dictionary, f)
