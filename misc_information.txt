@@ -1,0 +1,128 @@
+This information all seems relevant and isn't in any particular order.
+
+= Recording procedure =
+For each recording session, the robot was placed on a level surface
+facing North.  The robot was then initialised (i.e. an IMU yaw reading
+of zero should roughly corresond with magnetic north). Before
+recording, the robot would first attempt to align itself with zero
+according to the IMU (this would compensate for small amounts drift of
+from any previous recordings). Once zeroed, the robot would record
+statically for five seconds, then perform a full 360 degree rotation
+on the spot, then record statically for a further five seconds. After every
+three or four rotations, the robot would be re-initialised to cope
+with IMU drift (so that starting directions remained reasonably
+consistent).
+
+Recordings were split into different sessions which tended to last
+about 15-20 minutes. The sky image was always taken at the start. Each
+session consists of twelve recordings.
+
+= Recording format and content =
+The recordings are stored in 'rosbags'. These files record from
+specified ROS topics in such a way that the data can be 'played back'
+later.
+
+The recordings contain the raw photodiode readings from each pol op
+unit (topics: pol_op_X, where x is 0-7, one topic for each unit), the
+yaw extracted from the IMU (topic: "yaw"), the complete IMU data*
+("odom"), and the video stream from the camera** (topic: "frames").
+
+The json files only contain the photodiode readings and yaw.
+
+* - The odometry data is stored as a quaternion. Given that most of
+    the time, the yaw was all that mattered, it was easier just to
+    have a separate topic for this. Full odometry data was included so
+    that we could check for tilt where the recording surface was not
+    necessarily level. All Sardinia recordings were levelled.
+
+** - Camera data is heavily downsampled on capture so there is no
+     option to have the video feed at full resolution. This is done
+     partly for efficiency and partly for the practical reason that
+     beetles only seem to use the intensity gradient to find the sun
+     (for which a high-res image isn't needed). The main reason the
+     image data is useful is that we can use it to determine if the
+     direction from the intensity gradient changes in lockstep with
+     the polarisation data (as it should). In the same way, we can use
+     the position of the sun computed via the camera to compare
+     against the position of the sun computed from the sensor
+     (computing sun azimuth rather than polraisation by summing the
+     horizontally and vertically polarized units).
+
+= Camera =
+Sky images were taken from a non-standard RaspberryPi
+camera unit mounted in the centre of the sensor. The lens should be
+exactly cetnred with respect to the SkyCompass. Unfortunately due to a
+poor mount design, the camera may not always be pointing directly at
+the zenith. This has been fixed for the next data collection period.
+
+The camera unit used was an 8MP Sony IMX2019 Camera Module with M12
+lens. The lens used was an M12 185deg fisheye lens.
+
+Store pages:
+Camera - https://thepihut.com/products/8mp-sony-imx219-camera-module-with-m12-lens-for-raspberry-pi
+Lens - https://thepihut.com/products/m12-lens-185-degree-fisheye-1-2-5-optical-format-1-56mm-focal-length
+
+
+= Sky compass decoding =
+For the decoding step, I implemented the equations from the SkyCompass
+paper directly rather than using InvertPy/InvertSy. This was partly
+for ease and partly as a replication test. Given just the equations
+rather than the code, does it all work? Thankfully the answer appears
+to be yes.
+
+Note that the plots use a log activation rather than square root (as
+in the paper). The square root activation function seems to give a
+noisier sensor reading so I stuck with the log activation.
+
+= Plots =
+For transparency, these are not the same plots that I shared
+for either discussion or conference or my lab presentation. My
+computer was accidentally wiped and I lost the code required to
+generate those plots (thankfully didn't lose the data). This repo is
+essentially a re-write. The plots look the same to me, and the angular
+cleanup routine should be identical but it's just worth bearing in
+mind.
+
+= Known issues =
+- Wiring -
+Some of the wiring wasn't particularly good for the early
+recordings. Wires and connections were prone to breaking. This was
+discovered after all recordings were taken but problems (1) were
+fairly obvious in sensor readings and (2) appeared to be caused by
+excessive handling which occurred during navigation experiments (not
+included in this repo).
+
+- Zero readings -
+For some 'frames' the horizonal and vertical photodiodes can both
+return zero resulting in division by zero when trying to decode the
+sensor. These cases are ignored, allowing units to produce
+not-a-number responses instead of failing completely. As a result the
+sensor can sometimes return NaN. These show up as gaps in the plotted
+line. From experience working with the sensor in the field, this
+doesn't seem to affect real-time sensor usage in any significant
+way.
+
+- Filter slippage -
+The original filter mount design was not very good. As a result
+filters could sometimes slip meaning that all light got to the
+photodiode rather than just polarised light. This only seemed to be a
+major problem for one particular pol-op unit and for one particular
+filter (at 45deg so not used for the bio-inspired decoding anyway).
+
+The filter slippage problem was later fixed but I can't guarantee that
+it didn't affect any of the recordings. If it did, the effect does not
+appear to be major.
+
+This may cause problems with the eigenvector decoding method.
+
+- Negative values -
+Some of the photodiodes return negative values as opposed to
+positive. I was never sure why this was (potentially just a hardware
+quirk as the ADCs we're using sign-extend their output). In any case,
+the values always seem to grow the same way, just into the negative
+instead of the positive. As such, before decoding, we take the
+absolute value of each photodiode. Note that the photodiode values in
+the rosbag files are raw, the absolute value is taken offline so we could
+still investigate this if desired.
+
+
