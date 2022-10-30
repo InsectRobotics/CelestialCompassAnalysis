@@ -39,14 +39,9 @@ if __name__ == "__main__":
                     x for x in os.listdir(os.getcwd()) if ".bag" in x
                 ]
 
-
-
                 # Mirror structure
-                output_path = os.path.join(
-                    out_base_dir, s, d, r
-                )
-                if copy_all:
-                    # Most likely jpegs or notes
+                output_path = os.path.join(out_base_dir, s, d, r)
+                if copy_all: # Most likely jpegs or notes
                     other_files = [
                         x for x in os.listdir(os.getcwd()) if ".bag" not in x
                     ]
