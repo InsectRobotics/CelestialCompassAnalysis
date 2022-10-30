@@ -1,3 +1,10 @@
+"""
+plot_json.py
+
+Produce a Figure from a recording session where each recording is stored as a
+json file.
+"""
+
 import matplotlib.pyplot as plt
 import numpy as np
 import json
