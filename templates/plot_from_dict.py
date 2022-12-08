@@ -45,13 +45,14 @@ def synchronise(d, zero=True, unwrap=True):
     d = np.array(d)
     if zero:
         d = d - d[0]
-    d = d % (2*np.pi)
+    d = d % (2 * np.pi)
     if unwrap:
-        for i in range(len(d) - 1):
-            if (d[i] < 3*np.pi/4) and (d[i+1] > 7*np.pi/4):
-                d[i+1] = d[i+1] - 2*np.pi
-            elif (d[i] > 7*np.pi/4) and (d[i+1] < 3*np.pi/4):
-                d[i+1] = d[i+1] + 2*np.pi
+        d = np.unwrap(d, np.pi, period=2 * np.pi)
+        # for i in range(len(d) - 1):
+        #     if (d[i] < 3 * np.pi / 4) and (d[i+1] > 7 * np.pi / 4):
+        #         d[i+1] = d[i+1] - 2 * np.pi
+        #     elif (d[i] > 7 * np.pi/4) and (d[i+1] < 3 * np.pi/4):
+        #         d[i+1] = d[i+1] + 2 * np.pi
 
     return d
 
@@ -85,6 +86,8 @@ def decode_sky_compass(po, n_sol=8, pol_prefs=np.radians([0, 90, 180, 270, 45, 1
 
     for t in range(duration):  # For each timestep
 
+        # ensure that the response is in [0, 1]
+        # the highest observed value was 11986 (Thursday 17:20)
         response = np.clip(po[:, t] / 12000., 0., 1.)
         if polarisation and not intensity:
             angle, sigma = pol2sol(response, sol_prefs, pol_prefs, unit_tranform=unit2pol)
@@ -161,6 +164,7 @@ def produce_plot(data_dictionary):
     # Plot image if available
     #
     plot_image(data_dictionary["image_filename"], ax=ax["image"])
+    del data_dictionary["image_filename"]
 
     max_length = 0  # Maximum recording length in set
     min_length = 0  # Minimum recording length in set
@@ -181,7 +185,7 @@ def produce_plot(data_dictionary):
             po.append(data[k])
 
         po = np.array(po)
-        pol_sensor_angle = synchronise(np.array(decode_sky_compass(po, polarisation=True, intensity=True)[0]))
+        pol_sensor_angle = synchronise(np.array(decode_sky_compass(po, polarisation=True, intensity=False)[0]))
 
         if max_length < len(imu):
             max_length = len(imu)
@@ -194,8 +198,8 @@ def produce_plot(data_dictionary):
             min_length = len(imu)
 
         # Plot cleaned angles
-        ax["skycompass"].plot(pol_sensor_angle)
-        ax["imu_yaw"].plot(imu)
+        plot_angles(max_length, data=pol_sensor_angle, ax=ax["skycompass"], x_ticks=False)
+        plot_angles(max_length, data=imu, ax=ax["imu_yaw"], x_ticks=False)
 
         corrected_skycompass_table.append(pol_sensor_angle)
         corrected_imu_table.append(imu)
@@ -212,8 +216,8 @@ def produce_plot(data_dictionary):
         imu_means.append(imumean)
 
     # Plot (clean) averages
-    ax["averages"].plot(synchronise(sc_means))
-    ax["averages"].plot(synchronise(imu_means))
+    plot_angles(max_length, data=synchronise(sc_means), ax=ax["averages"])
+    plot_angles(max_length, data=synchronise(imu_means), ax=ax["averages"])
 
     # Add text
     # ax["skycompass"].text(0,5,"Sky Compass")
@@ -224,20 +228,6 @@ def produce_plot(data_dictionary):
     ax["imu_yaw"].set_title("IMU (Yaw)")
     ax["averages"].set_title("Circular average")
     fig.tight_layout()
-
-    # General formatting
-    ax["image"].set_xticks([])
-    ax["image"].set_yticks([])
-    padding = 0.7
-    ax["skycompass"].set_ylim([-padding, 2*np.pi + padding])
-    ax["imu_yaw"].set_ylim([-padding, 2*np.pi + padding])
-    ax["averages"].set_ylim([-padding, 2*np.pi + padding])
-    x_axis_padding = 20
-    ax["skycompass"].set_xlim([-x_axis_padding, max_length + x_axis_padding])
-    ax["imu_yaw"].set_xlim([-x_axis_padding, max_length + x_axis_padding])
-    ax["averages"].set_xlim([-x_axis_padding, max_length + x_axis_padding])
-    ax["skycompass"].set_xticks([])
-    ax["imu_yaw"].set_xticks([])
 
     return fig
 
@@ -254,3 +244,34 @@ def plot_image(imagefile, ax=None):
     else:
         ax.set_title("No image found")
 
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    return ax
+
+
+def plot_angles(max_length, data=None, ax=None, x_padding=0, y_padding=np.pi/18, x_ticks=True):
+    if ax is None:
+        ax = plt.subplot(111)
+
+    if data is not None:
+        data = np.array(data)
+        line, = ax.plot(data)
+        c = line.get_color()
+        for shift in np.linspace(-4 * np.pi, 4 * np.pi, 5)[[0, 1, 3, 4]]:
+            ax.plot(data + shift, c=c)
+
+    # General formatting
+    # ax.set_yticks([0, np.pi, 2*np.pi])
+    # ax.set_yticklabels([r"$0$", r"$\pi$", r"$2 \pi$"])
+    ax.set_yticks([-np.pi, 0, np.pi])
+    ax.set_yticklabels([r"$-\pi$", r"$0$", r"$\pi$"])
+
+    if not x_ticks:
+        ax.set_xticks([])
+
+    # ax.set_ylim([-y_padding, 2 * np.pi + y_padding])
+    ax.set_ylim([-np.pi - y_padding, np.pi + y_padding])
+    ax.set_xlim([-x_padding, max_length + x_padding - 1])
+
+    return ax
