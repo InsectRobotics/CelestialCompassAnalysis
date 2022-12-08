@@ -16,6 +16,7 @@ import argparse
 import os
 from scipy.stats import circmean
 
+
 def act(s, log=True):
     """
     Photoreceptor activation function. Gkanias et al. (2019) uses square
@@ -30,6 +31,7 @@ def act(s, log=True):
         return np.sqrt(s)
 
     return np.log(s)
+
 
 def synchronise(d, zero=True, unwrap=True):
     """
@@ -53,10 +55,9 @@ def synchronise(d, zero=True, unwrap=True):
 
     return d
 
-def decode_sky_compass(po,
-                       n_sol=8,
-                       pol_prefs=np.radians([0,90,180,270,45,135,225,315])
-):
+
+def decode_sky_compass(po, n_sol=8, pol_prefs=np.radians([0, 90, 180, 270, 45, 135, 225, 315]),
+                       polarisation=True, intensity=False):
     """
     Sky compass decoding routine from Gkanias et al. (2019). This has been
     implemeneted from scratch using the equations presented as a demonstration
@@ -77,65 +78,93 @@ def decode_sky_compass(po,
     # po[p][t][d] reading for diode d of unit p at time t
     units, duration, diodes = po.shape
 
-    n_pol = len(pol_prefs)
-    sol_prefs = np.linspace(0,2*np.pi - (2*np.pi / n_sol),n_sol)
+    sol_prefs = np.linspace(0, 2 * np.pi - (2 * np.pi / n_sol), n_sol)
 
     angular_outputs = []
     confidence_outputs = []
 
-    for t in range(duration): # For each timestep
-        # Get photodiode responses for each unit
-        unit_responses = [ po[x][t] for x in range(units) ]
-        ss = [ (s_h, s_v) for [_, _, s_v, s_h] in unit_responses ]
-        rates = [ (act(h), act(v)) for (h, v) in ss ]
-        r_pol = [ (r_h - r_v) / (r_h + r_v) for (r_h, r_v) in rates ]
+    for t in range(duration):  # For each timestep
 
-        # Init for sum
-        r_sol = np.zeros(n_sol)
-        R = 0
-        for z in range(n_sol):
-            for j in range(n_pol): # Compute SOL responses (Eq. (2))
-                aj = pol_prefs[j] - np.pi/2
-                r_sol[z] += (n_sol/n_pol) * np.sin(aj - sol_prefs[z]) * r_pol[j]
+        response = np.clip(po[:, t] / 12000., 0., 1.)
+        if polarisation and not intensity:
+            angle, sigma = pol2sol(response, sol_prefs, pol_prefs, unit_tranform=unit2pol)
+        elif not polarisation and intensity:
+            angle, sigma = pol2sol(response, sol_prefs + np.pi, pol_prefs, unit_tranform=unit2int)
+        else:
+            a_pol, c_pol = pol2sol(response, sol_prefs, pol_prefs, unit_tranform=unit2pol)
+            a_int, c_int = pol2sol(response, sol_prefs + np.pi, pol_prefs, unit_tranform=unit2int)
+            s_pol = 1. / c_pol ** 2
+            s_int = 1. / c_int ** 2
 
-            # Accumulate R (Eq. (3))
-            R += r_sol[z]*np.exp(-1j*2*np.pi*(z - 1) / n_sol)
-
-        a = np.real(R)
-        b = np.imag(R)
-
-        # Compute argument and magnitude of complex conjugate of R (Eq. (4))
-        angle = np.arctan2(-b,a)
-        confidence = np.sqrt(a**2 + b**2)
+            angle = (s_pol * a_int + s_int * a_pol) / (s_pol + s_int)
+            sigma = (s_pol * s_int) / (s_pol + s_int)
         angular_outputs.append(angle)
-        confidence_outputs.append(confidence)
+        confidence_outputs.append(sigma)
 
     return angular_outputs, confidence_outputs
 
 
+def pol2sol(po, sol_prefs, pol_prefs, unit_tranform):
+    units, diodes = po.shape
+    n_sol = len(sol_prefs)
+    n_pol = len(pol_prefs)
+
+    # Get photodiode responses for each unit
+    r_pol = np.array([unit_tranform(po[x]) for x in range(units)])
+
+    # Init for sum
+    r_sol = np.zeros(n_sol)
+    R = 0
+    for z in range(n_sol):
+        for j in range(n_pol):  # Compute SOL responses (Eq. (2))
+            aj = pol_prefs[j] - np.pi / 2
+            r_sol[z] += (n_sol / n_pol) * np.sin(aj - sol_prefs[z]) * r_pol[j]
+
+        # Accumulate R (Eq. (3))
+        R += r_sol[z] * np.exp(-1j * 2 * np.pi * (z - 1) / n_sol)
+
+    a = np.real(R)
+    b = np.imag(R)
+
+    # Compute argument and magnitude of complex conjugate of R (Eq. (4))
+    angle = np.arctan2(-b, a)
+    confidence = np.sqrt(a ** 2 + b ** 2)
+
+    return angle, confidence
+
+
+def unit2pol(unit_response, log=True):
+    r_h, r_v = unit2vh(unit_response, log)
+    return (r_h - r_v) / (r_h + r_v)
+
+
+def unit2int(unit_response, log=True):
+    r_h, r_v = unit2vh(unit_response, log)
+    r = (r_h + r_v) / 2
+    return r
+
+
+def unit2vh(unit_response, log=True):
+    _, _, s_v, s_h = unit_response
+    return act(s_h, log), act(s_v, log)
+
+
 def produce_plot(data_dictionary):
 
-    mosaic = [["image","skycompass"],
-              ["image","imu_yaw"],
-              ["image","averages"]]
+    mosaic = [["image", "skycompass"],
+              ["image", "imu_yaw"],
+              ["image", "averages"]]
 
-    fig, ax = plt.subplot_mosaic(mosaic, figsize=(10,4))
+    fig, ax = plt.subplot_mosaic(mosaic, figsize=(10, 4))
 
     #
     # Plot image if available
     #
-    imagefile = data_dictionary["image_filename"]
-    del data_dictionary["image_filename"]
-    if imagefile != None:
-        img = mpimg.imread(imagefile)
-        ax["image"].imshow(img)
-        ax["image"].set_title(imagefile.split(".")[0].replace("_", " "))
-    else:
-        ax["image"].set_title("No image found")
+    plot_image(data_dictionary["image_filename"], ax=ax["image"])
 
-    max_length = 0 # Maximum recording length in set
-    min_length = 0 # Minimum recording length in set
-    first = True # First iteration flag
+    max_length = 0  # Maximum recording length in set
+    min_length = 0  # Minimum recording length in set
+    first = True  # First iteration flag
 
     # Corrected datastructures for computing averages
     corrected_skycompass_table = []
@@ -152,7 +181,7 @@ def produce_plot(data_dictionary):
             po.append(data[k])
 
         po = np.array(po)
-        pol_sensor_angle = synchronise(np.array(decode_sky_compass(po)[0]))
+        pol_sensor_angle = synchronise(np.array(decode_sky_compass(po, polarisation=True, intensity=True)[0]))
 
         if max_length < len(imu):
             max_length = len(imu)
@@ -211,4 +240,17 @@ def produce_plot(data_dictionary):
     ax["imu_yaw"].set_xticks([])
 
     return fig
+
+
+def plot_image(imagefile, ax=None):
+
+    if ax is None:
+        ax = plt.subplot(111)
+
+    if imagefile is not None:
+        img = mpimg.imread(imagefile)
+        ax.imshow(img)
+        ax.set_title(imagefile.split(".")[0].replace("_", " "))
+    else:
+        ax.set_title("No image found")
 

@@ -15,8 +15,9 @@ from scipy.stats import circmean
 
 import plot_from_dict as pfd
 
+
 def plot_json(session, outfile=None):
-        """
+    """
     Produce a figure along with a local output filename. For the output filename
     the caller must specify any preceeding directory structure, otherwise the
     output file will be relative to the calling directory.
@@ -33,6 +34,7 @@ def plot_json(session, outfile=None):
     #
     # Pull in data
     #
+
     if not os.path.isdir(session):
         print("-s must specify a directory")
         sys.exit()
@@ -46,7 +48,6 @@ def plot_json(session, outfile=None):
         print("There are no json files in the specified directory.")
         sys.exit()
 
-
     if len(imagefile) == 0:
         print("Warning: missing sky image file from the session directory.")
         imagefile = None
@@ -56,14 +57,14 @@ def plot_json(session, outfile=None):
         imagefile = imagefile[0]
         # If outfile not specified, set to session spec
         if outfile == None:
-            outfile = imagefile.split(".")[0] + ".pdf"
+            outfile = imagefile.split(".")[0] + ".png"
 
     # No output file specified and no/multiple image files
     # Use session directory name as pdf name
     if outfile == None:
         session_path = session.split("/")
         print(session_path)
-        outfile = session_path[len(session_path) - 2] + ".pdf"
+        outfile = session_path[len(session_path) - 2] + ".png"
 
     # Pull all recordings into dictionary
     full_data = dict()
@@ -78,7 +79,8 @@ def plot_json(session, outfile=None):
     fig = pfd.produce_plot(full_data)
     return fig, outfile
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     calling_directory = os.getcwd()
     parser = argparse.ArgumentParser(
         description="Produce a recording-session plot from json."

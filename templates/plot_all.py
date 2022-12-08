@@ -11,8 +11,8 @@ import plot_bagfile as pb
 import matplotlib.pyplot as plt
 
 if __name__ == "__main__":
-    data_dir = os.path.join(os.getcwd(),'../sardinia_data')
-    out_base_dir = os.path.join(os.getcwd(),'../plots')
+    data_dir = os.path.join(os.getcwd(), '../sardinia_data')
+    out_base_dir = os.path.join(os.getcwd(), '../plots')
 
     # Make plot directory if it doesn't exist. Existing files will
     # be overwritten.
