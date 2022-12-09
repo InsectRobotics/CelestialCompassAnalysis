@@ -16,6 +16,12 @@ import argparse
 import os
 from scipy.stats import circmean
 
+UNIT_ANGLES = np.deg2rad([45, 135, 0, 90], dtype='float64')  # -45, +45, 0, 90
+POL_PREFS = np.deg2rad([0, 90, 180, 270, 45, 135, 225, 315], dtype='float64')
+
+A = None
+A_inv = A
+
 
 def act(s, log=True):
     """
@@ -57,8 +63,7 @@ def synchronise(d, zero=True, unwrap=True):
     return d
 
 
-def decode_sky_compass(po, n_sol=8, pol_prefs=np.radians([0, 90, 180, 270, 45, 135, 225, 315]),
-                       polarisation=True, intensity=False):
+def decode_sky_compass(po, n_sol=8, pol_prefs=POL_PREFS, polarisation=True, intensity=False):
     """
     Sky compass decoding routine from Gkanias et al. (2019). This has been
     implemeneted from scratch using the equations presented as a demonstration
@@ -87,15 +92,17 @@ def decode_sky_compass(po, n_sol=8, pol_prefs=np.radians([0, 90, 180, 270, 45, 1
     for t in range(duration):  # For each timestep
 
         # ensure that the response is in [0, 1]
-        # the highest observed value was 11986 (Thursday 17:20)
-        response = np.clip(po[:, t] / 12000., 0., 1.)
-        if polarisation and not intensity:
-            angle, sigma = pol2sol(response, sol_prefs, pol_prefs, unit_tranform=unit2pol)
+        # the highest observed value was 32768 (Thursday 17:20)
+        response = np.clip(po[:, t] / 33000., 0., 1.)
+        if not polarisation and not intensity:
+            angle, sigma = pol2eig(response, pol_prefs)
+        elif polarisation and not intensity:
+            angle, sigma = pol2sol(response, sol_prefs, pol_prefs, unit_transform=unit2pol)
         elif not polarisation and intensity:
-            angle, sigma = pol2sol(response, sol_prefs + np.pi, pol_prefs, unit_tranform=unit2int)
+            angle, sigma = pol2sol(response, sol_prefs + np.pi, pol_prefs, unit_transform=unit2int)
         else:
-            a_pol, c_pol = pol2sol(response, sol_prefs, pol_prefs, unit_tranform=unit2pol)
-            a_int, c_int = pol2sol(response, sol_prefs + np.pi, pol_prefs, unit_tranform=unit2int)
+            a_pol, c_pol = pol2sol(response, sol_prefs, pol_prefs, unit_transform=unit2pol)
+            a_int, c_int = pol2sol(response, sol_prefs + np.pi, pol_prefs, unit_transform=unit2int)
             s_pol = 1. / c_pol ** 2
             s_int = 1. / c_int ** 2
 
@@ -107,13 +114,53 @@ def decode_sky_compass(po, n_sol=8, pol_prefs=np.radians([0, 90, 180, 270, 45, 1
     return angular_outputs, confidence_outputs
 
 
-def pol2sol(po, sol_prefs, pol_prefs, unit_tranform):
+def pol2eig(po, pol_prefs):
+
+    units, diodes = po.shape
+
+    # Get photodiode responses for each unit
+    phi, d = np.array([unit2eig(po[x]) for x in range(units)]).T
+
+    pe = np.array([np.cos(phi + pol_prefs), np.sin(phi + pol_prefs), np.zeros_like(phi)])
+
+    alpha = -pol_prefs
+    gamma = np.full_like(alpha, np.deg2rad(45))
+
+    c = np.zeros([3, 3, 8], dtype='float32')
+    e = np.zeros_like(pe)
+    for i, a, g in zip(range(len(alpha)), alpha, gamma):
+        c[..., i] = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
+        c[..., i] = np.dot(c[..., i], np.array([[np.cos(g), 0, np.sin(g)], [0, 1, 0], [-np.sin(g), 0, np.cos(g)]]))
+
+        e[:, i] = c[..., i].dot(pe[:, i])
+
+    eig = e.dot(e.T)
+
+    eigenvalues, eigenvectors = np.linalg.eigh(eig)
+
+    i_star = np.argmin(eigenvalues)
+    s_1, s_2, s_3 = eigenvectors[i_star]
+
+    # print(eigenvalues)
+    # print(eigenvectors)
+
+    # import sys
+    # sys.exit()
+
+    # Compute argument and magnitude of complex conjugate of R (Eq. (4))
+    angle = np.arctan2(s_2, s_1)
+    confidence = 1.0
+
+    return angle, confidence
+
+
+def pol2sol(po, sol_prefs, pol_prefs, unit_transform):
     units, diodes = po.shape
     n_sol = len(sol_prefs)
     n_pol = len(pol_prefs)
 
     # Get photodiode responses for each unit
-    r_pol = np.array([unit_tranform(po[x]) for x in range(units)])
+    r_pol = np.array([unit_transform(po[x]) for x in range(units)])
 
     # Init for sum
     r_sol = np.zeros(n_sol)
@@ -136,6 +183,22 @@ def pol2sol(po, sol_prefs, pol_prefs, unit_tranform):
     return angle, confidence
 
 
+def unit2eig(unit_response):
+    f = unit_response
+    # q1, q2, q3 = np.linalg.inv(a.T.dot(a)).dot(a.T).dot(f)
+    q1, q2, q3 = A_inv.dot(f)
+    # q1 = i_0 - i_90
+    # q2 = i_45 - i_135
+    # q3 = (i_0 + i_45 + i_90 + i_135) / 2
+
+    phi = 0.5 * np.arctan2(q2, q1)
+    d = np.sqrt(np.square(q1) + np.square(q2)) / q3
+
+    # print(f"phi = {np.rad2deg(phi):.2f}, d = {d:.2f}, responses = {unit_response}")
+
+    return phi, d
+
+
 def unit2pol(unit_response, log=True):
     r_h, r_v = unit2vh(unit_response, log)
     return (r_h - r_v) / (r_h + r_v)
@@ -143,16 +206,18 @@ def unit2pol(unit_response, log=True):
 
 def unit2int(unit_response, log=True):
     r_h, r_v = unit2vh(unit_response, log)
-    r = (r_h + r_v) / 2
+    # r = (r_h + r_v) / 2
+    r = np.sqrt(r_h**2 + r_v**2)
     return r
 
 
 def unit2vh(unit_response, log=True):
+    # -45, +45, 0, 90
     _, _, s_v, s_h = unit_response
     return act(s_h, log), act(s_v, log)
 
 
-def produce_plot(data_dictionary):
+def produce_plot(data_dictionary, polarisation=True, intensity=False):
 
     mosaic = [["image", "skycompass"],
               ["image", "imu_yaw"],
@@ -174,6 +239,9 @@ def produce_plot(data_dictionary):
     corrected_skycompass_table = []
     corrected_imu_table = []
 
+    mse = []
+
+    print("MAE:", end=" ")
     for k in data_dictionary.keys():
         data = data_dictionary[k]
 
@@ -185,7 +253,8 @@ def produce_plot(data_dictionary):
             po.append(data[k])
 
         po = np.array(po)
-        pol_sensor_angle = synchronise(np.array(decode_sky_compass(po, polarisation=True, intensity=False)[0]))
+        pol_sensor_angle = synchronise(
+            np.array(decode_sky_compass(po, polarisation=polarisation, intensity=intensity)[0]))
 
         if max_length < len(imu):
             max_length = len(imu)
@@ -201,8 +270,12 @@ def produce_plot(data_dictionary):
         plot_angles(max_length, data=pol_sensor_angle, ax=ax["skycompass"], x_ticks=False)
         plot_angles(max_length, data=imu, ax=ax["imu_yaw"], x_ticks=False)
 
+        mse.append(compare(pol_sensor_angle, imu))
+        print(f"{np.rad2deg(mse[-1]):.2f}", end="\t")
+
         corrected_skycompass_table.append(pol_sensor_angle)
         corrected_imu_table.append(imu)
+    print(f"\nMean MAE: {np.rad2deg(np.nanmean(mse)):.2f} +/- {np.rad2deg(np.nanstd(mse)):.2f}")
 
     # Compute mean angle over all reacordings at each timestep.
     sc_means = []
@@ -275,3 +348,20 @@ def plot_angles(max_length, data=None, ax=None, x_padding=0, y_padding=np.pi/18,
     ax.set_xlim([-x_padding, max_length + x_padding - 1])
 
     return ax
+
+
+def compare(x, ground_truth):
+    ang_distance = (x - ground_truth + np.pi) % (2 * np.pi) - np.pi
+    return np.mean(np.abs(ang_distance))
+
+
+def update_globals():
+    global A, A_inv
+
+    A = np.round(np.array([np.cos(2 * UNIT_ANGLES), np.sin(2 * UNIT_ANGLES), np.ones_like(UNIT_ANGLES)]).T, decimals=2)
+
+    # A_inv = np.linalg.inv(A.T.dot(A)).dot(A.T)
+    A_inv = np.linalg.pinv(A)
+
+
+update_globals()

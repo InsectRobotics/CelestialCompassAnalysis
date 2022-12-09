@@ -16,7 +16,8 @@ from scipy.stats import circmean
 import plot_from_dict as pfd
 from rosbag_to_json import rosbag_to_dict
 
-def plot_bagfile(session, outfile=None):
+
+def plot_bagfile(session, outfile=None, mode="polarisation"):
     """
     Produce a figure along with a local output filename. For the output filename
     the caller must specify any preceeding directory structure, otherwise the
@@ -38,6 +39,9 @@ def plot_bagfile(session, outfile=None):
         print("-s must specify a directory")
         sys.exit()
 
+    polarisation = "polarisation" in mode.lower()
+    intensity = "intensity" in mode.lower()
+
     calling_dir = os.getcwd()
     os.chdir(session)
     imagefile = [x for x in os.listdir() if ".jpg" in x]
@@ -56,14 +60,13 @@ def plot_bagfile(session, outfile=None):
         imagefile = imagefile[0]
         # If outfile not specified, set to session spec
         if outfile == None:
-            outfile = imagefile.split(".")[0] + ".pdf"
+            outfile = f"{imagefile.split('.')[0]}-{mode}.pdf"
 
     # No output file specified and no/multiple image files
     # Use session directory name as pdf name
     if outfile == None:
-        session_path = session.split("/")
-        print(session_path)
-        outfile = session_path[len(session_path) - 2] + ".pdf"
+        session_path = os.path.abspath(session.split(os.path.sep))
+        outfile = f"{session_path[len(session_path) - 2]}-{mode}.pdf"
 
 
     #
@@ -78,8 +81,9 @@ def plot_bagfile(session, outfile=None):
 
     full_data["image_filename"] = imagefile
 
-    fig = pfd.produce_plot(full_data)
+    fig = pfd.produce_plot(full_data, polarisation=polarisation, intensity=intensity)
     return fig, outfile
+
 
 if __name__=="__main__":
     calling_directory = os.getcwd()
@@ -96,14 +100,26 @@ if __name__=="__main__":
 
     args = parser.parse_args()
 
-    session = args.session
+    session = os.path.abspath(args.session)
     outfile = args.output
 
-    fig, outfile = plot_bagfile(session, outfile=outfile)
+    fig = None
+    unit_angles = [
+        [45.0, -45.0, 90.0, 0.0],
+        [-45.0, 45.0, 90.0, 0.0],
+        [-45.0, 45.0, 0.0, 90.0],
+        [45.0, -45.0, 0.0, 90.0]
+    ]
+    for ua in unit_angles:
+        print("\t".join([f"{a:.0f}" for a in ua]), end="\t")
+        pfd.UNIT_ANGLES[:] = ua
+        pfd.update_globals()
+        fig, outfile = plot_bagfile(session, outfile=outfile, mode="eigenvector")
+        outfile = outfile.replace(".pdf", ".png")
 
-    # Save files relative to calling directory unless absolute
-    # path is specified.
-    os.chdir(calling_directory)
-    fig.savefig(outfile, bbox_inches="tight")
-    plt.show()
+        # Save files relative to calling directory unless absolute
+        # path is specified.
+        # os.chdir(calling_directory)
+        # fig.savefig(outfile, bbox_inches="tight")
+        plt.show()
 
