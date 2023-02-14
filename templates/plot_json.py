@@ -76,7 +76,7 @@ def plot_json(session, outfile=None):
 
     full_data["image_filename"] = imagefile
 
-    fig = pfd.produce_plot(full_data)
+    fig = pfd.produce_plot(full_data, polarisation=False, intensity=False)
     return fig, outfile
 
 

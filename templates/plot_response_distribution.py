@@ -70,6 +70,8 @@ if __name__ == "__main__":
     import argparse
     import matplotlib.pyplot as plt
 
+    scale = 1.0 / 12000.0
+
     calling_directory = os.getcwd()
     parser = argparse.ArgumentParser(
         description="Produce a recording-session plot for the pol units."
@@ -91,16 +93,16 @@ if __name__ == "__main__":
     angles_3 = np.array(data["map"][2]["angle"]) - 90
     pd_3_min = abs(np.array(data["map"][2]["min_response"]))
     pd_3_max = abs(np.array(data["map"][2]["max_response"]))
-    pd_3 = np.mean([pd_3_min, pd_3_max], axis=0)
+    pd_3 = np.mean([pd_3_min, pd_3_max], axis=0) * scale
     pd_3_sigma = np.std([pd_3_min, pd_3_max], axis=0)
     angles_4 = np.array(data["map"][3]["angle"]) - 90
     pd_4_min = abs(np.array(data["map"][3]["min_response"]))
     pd_4_max = abs(np.array(data["map"][3]["max_response"]))
-    pd_4 = np.mean([pd_4_min, pd_4_max], axis=0)
+    pd_4 = np.mean([pd_4_min, pd_4_max], axis=0) * scale
     pd_4_sigma = np.std([pd_4_min, pd_4_max], axis=0)
 
-    run_3_1 = abs(np.array(data["1"]["response"]))
-    run_3_2 = abs(np.array(data["2"]["response"]))
+    run_3_1 = abs(np.array(data["1"]["response"])) * scale
+    run_3_2 = abs(np.array(data["2"]["response"])) * scale
     time_3_1 = abs(np.array(data["1"]["time"]))
     time_3_2 = abs(np.array(data["2"]["time"]))
 
@@ -116,30 +118,44 @@ if __name__ == "__main__":
     popt_4, _ = curve_fit(objective, angles_4, pd_4, sigma=pd_4_sigma)
     print(f"PD 4: mean = {popt_4[1]:.2f}, SD = {popt_4[2]:.2f}")
 
+    # fig = plt.figure("photodiode-response-distribution.pdf", figsize=(5, 4))
+    fig = plt.figure("photodiode-response-distribution", figsize=(7, 4))
+
+    ax1 = plt.subplot(121, polar=True)
+    ax2 = plt.subplot(122, polar=True)
+
     angles_3_1 = savgol_filter(angles_3_1, 51, 3)
-    plt.plot(angles_3_1, run_3_1, c='C0', marker='x', ls='', lw=1)
+    ax1.plot(np.deg2rad(angles_3_1), run_3_1, c='C0', marker='x', ls='', lw=1)
 
     angles_3_2 = savgol_filter(angles_3_2, 51, 3)
-    plt.plot(angles_3_2, run_3_2, c='C0', marker='+', ls='', lw=1)
+    ax1.plot(np.deg2rad(angles_3_2), run_3_2, c='C0', marker='+', ls='', lw=1)
 
     # plt.fill_between(angles_3, np.zeros_like(angles_3), objective(angles_3, *popt_3), color='C0', alpha=0.2)
     # plt.fill_between(angles_4, np.zeros_like(angles_4), objective(angles_4, *popt_4), color='C1', alpha=0.2)
 
-    plt.fill_between(angles_3, np.zeros_like(angles_3), pd_3, color='C0', alpha=0.2, label="unit 3")
-    plt.fill_between(angles_4, np.zeros_like(angles_4), pd_4, color='C1', alpha=0.2, label="unit 4")
+    ax1.fill_between(np.deg2rad(angles_3), np.zeros_like(angles_3), pd_3, color='C0', alpha=0.2, label="unit 3")
+    ax2.fill_between(np.deg2rad(angles_4), np.zeros_like(angles_4), pd_4, color='C1', alpha=0.2, label="unit 4")
 
     # plt.plot(angles_3, pd_3, c='C0', lw=2, label='unit 3')
     # plt.plot(angles_4, pd_4, c='C1', lw=2, label='unit 4')
 
-    plt.plot(angles_3, np.mean([abs(pd_3), abs(pd_4)], axis=0), c='k', lw=3, alpha=0.7)
+    ax1.plot(np.deg2rad(angles_3), np.mean([pd_3, pd_4], axis=0), c='k', lw=3, alpha=0.7)
+    ax2.plot(np.deg2rad(angles_4), np.mean([pd_3, pd_4], axis=0), c='k', lw=3, alpha=0.7)
 
-    plt.legend()
+    # plt.legend()
 
-    plt.xlim(-90, 90)
-    plt.ylim(-1, 12000)
+    for ax in [ax1, ax2]:
+        ax.set_theta_direction(-1)
+        ax.set_theta_zero_location("N")
+        ax.set_xlim(-np.pi/6, np.pi/6)
+        ax.set_ylim(-0.01, 1.01)
+        ax.set_yticks([])
 
-    plt.ylabel("photodiode response")
-    plt.xlabel("direction of light with respect to photodiode orientation\n(minus = left, plus = right)")
+    ax1.set_title("unit 3")
+    ax2.set_title("unit 4")
+    # ax1.set_ylabel("photodiode (relative) response")
+    # ax2.set_xlabel("direction of light with respect to photodiode orientation\n(minus = left, plus = right)")
 
     plt.tight_layout()
-    plt.show()
+    # plt.show()
+    fig.savefig(os.path.join("..", "plots", "photodiode-response-distribution.svg"))
