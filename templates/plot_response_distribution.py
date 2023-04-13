@@ -121,8 +121,8 @@ if __name__ == "__main__":
     # fig = plt.figure("photodiode-response-distribution.pdf", figsize=(5, 4))
     fig = plt.figure("photodiode-response-distribution", figsize=(7, 4))
 
-    ax1 = plt.subplot(121, polar=True)
-    ax2 = plt.subplot(122, polar=True)
+    ax1 = plt.subplot(121, polar=False)
+    ax2 = plt.subplot(122, polar=False)
 
     angles_3_1 = savgol_filter(angles_3_1, 51, 3)
     ax1.plot(np.deg2rad(angles_3_1), run_3_1, c='C0', marker='x', ls='', lw=1)
@@ -145,9 +145,9 @@ if __name__ == "__main__":
     # plt.legend()
 
     for ax in [ax1, ax2]:
-        ax.set_theta_direction(-1)
-        ax.set_theta_zero_location("N")
-        ax.set_xlim(-np.pi/6, np.pi/6)
+        # ax.set_theta_direction(-1)
+        # ax.set_theta_zero_location("N")
+        ax.set_xlim(-np.pi/2, np.pi/2)
         ax.set_ylim(-0.01, 1.01)
         ax.set_yticks([])
 
@@ -158,4 +158,4 @@ if __name__ == "__main__":
 
     plt.tight_layout()
     # plt.show()
-    fig.savefig(os.path.join("..", "plots", "photodiode-response-distribution.svg"))
+    fig.savefig(os.path.join("..", "plots", "photodiode-response-distribution-flat.svg"))

@@ -1,5 +1,7 @@
-from scipy.signal import butter, filtfilt
-from scipy.stats import circmean
+from create_csv import read_csv_dataset, create_clean_csv, create_errors_csv, butter_low_pass_filter, compare
+from create_csv import compute_sensor_output_per_recording, compute_sensor_output, compute_sensor_output_from_responses
+from circstats import circ_mean, circ_median, circ_quantiles, circ_norm
+
 from datetime import datetime
 
 import pandas as pd
@@ -16,7 +18,6 @@ import os
 # mpl.use('Qt5Agg')  # QtAgg, Qt5Agg, TkAgg, WebAgg
 # mpl.use('QtAgg')  # non-gui: agg, pdf, pgf, ps, svg, template?
 
-MAX_INT = 11000.
 min_rs, max_rs = 3, 20
 norm_lines = mpl.colors.Normalize(0.5, max_rs + 0.5)
 cmap_lines = mpl.colormaps['tab20']
@@ -29,371 +30,84 @@ out_base = os.path.abspath(os.path.join(os.getcwd(), '..', 'plots', 'csv'))
 if not os.path.exists(out_base):
     os.makedirs(out_base)
 
-cutoff = 0.03
-fs = 2.0
-order = 1
-default_nb_samples = 360
-
-
-def butter_low_pass_filter(x):
-    beta, alpha = butter(order, cutoff, fs=fs, btype='low', analog=False)
-    return filtfilt(beta, alpha, x)
-
-
-def read_dataset(data_set, remove_outliers=False):
-    data_dir = os.path.join(data_base, data_set)
-    data = pd.read_csv(os.path.join(data_dir, f"{data_set}.csv"), low_memory=False)
-
-    data["timestamp"] = pd.to_datetime(data["timestamp"])
-
-    # s = np.sqrt(np.clip(data[["S0", "S1", "S2", "S3"]].astype('float32') / MAX_INT, np.finfo(float).eps, 1.))
-    s = np.clip(data[["S0", "S1", "S2", "S3"]].astype('float32') / MAX_INT, np.finfo(float).eps, 1.)
-    data["POL"] = (s["S3"] - s["S2"]) / (s["S2"] + s["S3"] + np.finfo(float).eps)
-    data["INT"] = (s["S2"] + s["S3"]) / 2
-    data["INT-POL"] = data["INT"] - data["POL"]
-    data = data[abs(data["POL"]) < 0.8]
-
-    # remove outliers
-    if remove_outliers:
-
-        sessions = np.unique(data["image_file"])
-        condition = []
-        for session in sessions:
-            condition.append(data["image_file"] == session)
-            recordings = np.unique(data["recording"])
-            for recording in recordings:
-                condition.append(data["recording"] == recording)
-                units = np.unique(data["unit"])
-                for unit in units:
-                    condition.append(data["unit"] == unit)
-
-                    dsr = data[np.all(condition, axis=0)]
-
-                    if dsr.shape[0] < 7:
-                        condition.pop()
-                        continue
-
-                    i_imu = np.argsort(dsr["IMU"].to_numpy())
-
-                    # fig, ax = plt.subplot_mosaic([["POL", "INT", "INT-POL"]], figsize=(7, 2))
-
-                    for si in ["POL", "INT", "INT-POL"]:
-                        s = dsr[si].to_numpy()
-
-                        # ax[si].plot(dsr["IMU"].to_numpy()[i_imu], s[i_imu])
-
-                        if np.all(np.isclose(s, np.mean(s))):
-                            data.loc[np.all(condition, axis=0), si] = np.nan
-                            continue
-
-                        s[i_imu] = butter_low_pass_filter(np.r_[s[i_imu[-50:]], s[i_imu], s[i_imu[:50]]])[50:-50]
-                        data.loc[np.all(condition, axis=0), si] = s
-
-                        # ax[si].plot(dsr["IMU"].to_numpy()[i_imu], s[i_imu])
-
-                    # fig.show()
-
-                    # print(f"{session}, {recording}, {unit}, {dsr.shape}")
-
-                    condition.pop()
-                condition.pop()
-
-            condition.pop()
-
-        data = data.dropna(axis=0)
-
-    data = data[data["recording"] != 'pol_op_recording']
-    data["recording"] = data["recording"].astype(int)
-
-    return data
-
-
-def compute_sensor_output(data, ring_size=8, nb_samples=360, polarisation=True, intensity=False):
-    # i_valid = [[0, 1, 2, 3, 4, 6]]
-    i_valid = [[1, 2]]
-
-    recordings = np.unique(data["recording"])
-    nb_recordings = len(recordings)
-    sol_angles = np.linspace(0, 2 * np.pi, 8, endpoint=False)
-    pol_angles = np.linspace(0, 2 * np.pi, ring_size, endpoint=False)
-    imu_angles = (np.linspace(0, 2 * np.pi, nb_samples, endpoint=False) + np.pi) % (2 * np.pi) - np.pi
-    all_pol_angles = np.zeros((nb_recordings, nb_samples), dtype='float32')
-
-    for i, rec in enumerate(recordings):
-        data_rec = data[data["recording"] == rec]
-        data_rec = data_rec[np.any(data_rec["unit"].to_numpy()[:, None] == i_valid, axis=1)]
-
-        imu = np.deg2rad(data_rec["IMU"].to_numpy())
-        azi = np.deg2rad(data_rec["sun_azimuth"].to_numpy())
-        pol = data_rec["POL"].to_numpy()
-        iny = data_rec["INT"].to_numpy()
-        inp = data_rec["INT-POL"].to_numpy()
-        # imu += azi
-
-        for s in range(nb_samples):
-            # get the desired absolute rotation of the compass (with respect to north)
-            rotate = imu_angles[s]
-
-            # calculate the distance between the orientation of each unit in the desired compass orientation
-            # and the orientation of each unit in the dataset
-            a_dist = abs((imu[:, None] + pol_angles[None, :] - rotate + np.pi) % (2 * np.pi) - np.pi)
-
-            # keep the dataset entries with the 3 closest orientations for each sensor
-            i_closest = np.argsort(a_dist, axis=0)
-
-            # calculate the median response of the POL and INT units on the preferred angles
-            pol_i = np.median(pol[i_closest[:3]], axis=0)
-            int_i = np.median(iny[i_closest[:3]], axis=0)
-            inp_i = np.median(inp[i_closest[:3]], axis=0)
-
-            # calculate the SOL responses
-            sol = np.zeros(8, dtype='float32')
-            if polarisation and not intensity:
-                sol = pol2sol(-pol_i, pol_prefs=pol_angles, sol_prefs=sol_angles)
-            elif intensity and not polarisation:
-                sol = pol2sol(int_i, pol_prefs=pol_angles, sol_prefs=sol_angles)
-            elif intensity and polarisation:
-                sol = pol2sol(inp_i, pol_prefs=pol_angles, sol_prefs=sol_angles)
-            elif not intensity and not polarisation:
-                sol_i = pol2sol(int_i, pol_prefs=pol_angles, sol_prefs=sol_angles)  # intensity
-                sol_p = pol2sol(pol_i, pol_prefs=pol_angles, sol_prefs=sol_angles + np.pi)  # polarisation
-                sol = (sol_i + sol_p) / 2
-            all_pol_angles[i, s], sigma = sol2angle(sol)
-            # all_pol_angles[i, s] -= np.mean(azi)  # subtract the sun azimuth to correct for the true north
-
-            # print(np.rad2deg(rotate), np.rad2deg(all_pol_angles[i, s]))
-    # drift = circmean((all_pol_angles - imu_angles + np.pi) % (2 * np.pi) - np.pi, axis=1)
-    # all_pol_angles -= drift[:, None]
-
-    return np.squeeze(all_pol_angles + np.pi) % (2 * np.pi) - np.pi, np.squeeze(imu_angles)
-
-
-def compute_sensor_output_per_recording(data_frame, ring_size, polarisation=True, intensity=False):
-    ang_x = data_frame.groupby("recording").apply(lambda x: compute_sensor_output(
-        x, ring_size=ring_size, polarisation=polarisation, intensity=intensity))
-
-    ang = np.array([x[0] for x in ang_x.to_numpy()], dtype='float64')
-    imu = np.array([x[1] for x in ang_x.to_numpy()], dtype='float64')
-
-    return ang, imu
-
-
-def compute_sensor_output_from_responses(res_pol, res_int, ring_size=8, polarisation=True, intensity=True):
-
-    nb_recordings, nb_samples = res_pol.shape
-    sol_angles = np.linspace(0, 2 * np.pi, 8, endpoint=False)
-    pol_angles = np.linspace(0, 2 * np.pi, ring_size, endpoint=False)
-    imu_angles = (np.linspace(0, 2 * np.pi, nb_samples, endpoint=False) + np.pi) % (2 * np.pi) - np.pi
-    all_pol_angles = np.zeros((nb_recordings, nb_samples), dtype='float32')
-
-    for i in range(nb_recordings):
-
-        pol = res_pol[i]
-        iny = res_int[i]
-
-        for s in range(nb_samples):
-            # get the desired absolute rotation of the compass (with respect to north)
-            rotate = imu_angles[s]
-
-            # calculate the distance between the orientation of each unit in the desired compass orientation
-            # and the orientation of each unit in the dataset
-            a_dist = abs((imu_angles[:, None] - pol_angles[None, :] + rotate + np.pi) % (2 * np.pi) - np.pi)
-
-            # keep the dataset entries with the 3 closest orientations for each sensor
-            i_closest = np.argsort(a_dist, axis=0)
-
-            # calculate the median response of the POL and INT units on the preferred angles
-            pol_i = np.median(pol[i_closest[:3]], axis=0)
-            int_i = np.median(iny[i_closest[:3]], axis=0)
-
-            # calculate the SOL responses
-            sol = np.zeros(8, dtype='float32')
-            if polarisation and not intensity:
-                sol = pol2sol(-pol_i, pol_prefs=pol_angles, sol_prefs=sol_angles)
-            elif intensity and not polarisation:
-                sol = pol2sol(int_i, pol_prefs=pol_angles, sol_prefs=sol_angles)
-            elif intensity and polarisation:
-                sol = pol2sol(int_i - pol_i, pol_prefs=pol_angles, sol_prefs=sol_angles)
-            elif not intensity and not polarisation:
-                sol_i = pol2sol(int_i, pol_prefs=pol_angles, sol_prefs=sol_angles)  # intensity
-                sol_p = pol2sol(-pol_i, pol_prefs=pol_angles, sol_prefs=sol_angles)  # polarisation
-                sol = (sol_i + sol_p) / 2
-            all_pol_angles[i, s], sigma = sol2angle(sol)
-
-    imu_angles = np.array([imu_angles] * nb_recordings)
-    return np.squeeze(all_pol_angles + np.pi) % (2 * np.pi) - np.pi, np.squeeze(imu_angles)
-
-
-def get_sensor_responses(data, imu_samples=360, imu_drift=0., nb_nearest=11):
-
-    i_valid = [[0, 1, 2, 3, 6]]
-    # i_valid = [[1, 2]]
-
-    imu_angles = (np.linspace(0, 2 * np.pi, imu_samples, endpoint=False) + np.pi) % (2 * np.pi) - np.pi
-    all_pol_res = np.zeros(imu_samples, dtype='float32')
-    all_int_res = np.zeros(imu_samples, dtype='float32')
-
-    if 'unit' in data.columns.to_list():
-        data_rec = data[np.any(data["unit"].to_numpy()[:, None] == i_valid, axis=1)]
-
-        imu_pol = np.deg2rad(data_rec["IMU"].to_numpy())
-        imu_iny = imu_pol
-        pol = data_rec["POL"].to_numpy()
-        iny = data_rec["INT"].to_numpy()
-    else:
-        imu_pol = np.deg2rad(data[data["unit_type"] == "POL"]["direction"].to_numpy())
-        imu_iny = np.deg2rad(data[data["unit_type"] == "INT"]["direction"].to_numpy())
-
-        pol = data[data["unit_type"] == "POL"]["response"].to_numpy()
-        iny = data[data["unit_type"] == "INT"]["response"].to_numpy()
-
-    for s in range(imu_samples):
-        # get the desired absolute rotation of the compass (with respect to north)
-        rotate = imu_angles[s] + imu_drift
-
-        # calculate the distance between the orientation of each unit in the desired compass orientation
-        # and the orientation of each unit in the dataset
-        p_dist = abs((imu_pol + rotate + np.pi) % (2 * np.pi) - np.pi)
-        i_dist = abs((imu_iny + rotate + np.pi) % (2 * np.pi) - np.pi)
-
-        # keep the dataset entries with the nearest orientations for each sensor
-        p_nearest = np.argsort(p_dist, axis=0)[:nb_nearest]
-        i_nearest = np.argsort(i_dist, axis=0)[:nb_nearest]
-
-        # calculate the median response of the POL and INT units on the preferred angles
-        all_pol_res[s] = np.median(pol[p_nearest], axis=0)
-        all_int_res[s] = np.median(iny[i_nearest], axis=0)
-
-    return all_pol_res, all_int_res
-
-
-def get_sensor_responses_per_recording(data, imu_samples=360, imu_drift=0., nb_nearest=11):
-    ang_x = data.groupby("recording").apply(lambda x: get_sensor_responses(
-        x, imu_samples=imu_samples, imu_drift=imu_drift, nb_nearest=nb_nearest))
-
-    pol_res = np.array([x[0] for x in ang_x.to_numpy()], dtype='float64')
-    int_res = np.array([x[1] for x in ang_x.to_numpy()], dtype='float64')
-
-    return pol_res, int_res
-
-
-def pol2sol(pol, sol_prefs, pol_prefs):
-    n_sol = len(sol_prefs)
-    n_pol = len(pol_prefs)
-
-    sol = np.sum((n_sol / n_pol) * np.cos(pol_prefs[:, None] - sol_prefs[None, :]) * pol[:, None], axis=0)
-    # sol = np.zeros(n_sol)
-    # for z in range(n_sol):
-    #     sol[z] = np.sum((n_sol / n_pol) * np.cos(pol_prefs - sol_prefs[z]) * pol)
-    #     # for j in range(n_pol):
-    #     #     sol[z] += (n_sol / n_pol) * np.cos(pol_prefs[j] - sol_prefs[z]) * pol[j]
-
-    return sol
-
-
-def sol2angle(sol):
-    z = np.sum(sol * np.exp(1j * np.linspace(0, 2 * np.pi, len(sol), endpoint=False)))
-
-    angle = np.angle(z)
-    confidence = np.abs(z)
-
-    return angle, confidence
-
-
-def plot_all(*datasets, reset_clean=False, reset_mae=True):
+cmap_dict = {
+    "ring_size": "viridis",
+    "ele_bins": "viridis",
+    "sun_elevation": "viridis",
+    "cloud_status": "tab10",
+    "canopy_status": "Dark2"
+}
+i_colour = '#ff5555ff'
+p_colour = '#cd55ffff'
+c_colour = '#557dffff'
+z_colour = '#ffffffff'
+e_colour = '#555555ff'
+
+figure_2_selected = [
+    'Sunday_20-11-22_14-28-16_SAST',
+    'Sunday_27-11-22_16-02-54_SAST'
+]
+solar_elevation_selected = [
+    'Monday_14-11-22_07-35-27_SAST',
+    'Monday_14-11-22_09-31-28_SAST',
+    'Monday_14-11-22_12-32-42_SAST',
+    'Monday_14-11-22_13-31-22_SAST',
+    'Monday_14-11-22_15-32-43_SAST',
+    'Monday_14-11-22_17-30-59_SAST',
+    'Monday_14-11-22_19-30-02_SAST'
+]
+cloud_level_selected = [
+    'Monday_14-11-22_09-31-28_SAST',  # no clouds
+    'Sunday_13-11-22_11-00-09_SAST',
+    'Monday_14-11-22_12-32-42_SAST',  # thin broken clouds
+    'Sunday_13-11-22_12-00-05_SAST',
+    'Sunday_13-11-22_14-00-04_SAST',  # thick broken clouds
+    'Sunday_13-11-22_15-00-05_SAST',
+    'Monday_21-11-22_14-26-58_SAST',  # thin solid clouds
+    'Friday_18-11-22_09-34-45_SAST',
+    'Saturday_26-11-22_10-17-03_SAST',  # thin uniform cloud
+    'Saturday_12-11-22_10-20-48_SAST',
+    'Tuesday_22-11-22_13-07-52_SAST',  # mixed broken clouds
+    'Saturday_12-11-22_13-35-07_SAST',
+    'Friday_11-11-22_16-01-02_SAST',  # thick solid clouds
+    'Wednesday_23-11-22_11-00-00_SAST',
+    'Saturday_12-11-22_15-23-06_SAST',  # thick uniform clouds
+    'Monday_21-11-22_07-01-53_SAST'
+]
+occlusion_level_selected = [
+    'Saturday_26-11-22_16-02-49_SAST',  # no occlusion
+    'Monday_21-11-22_05-31-37_SAST',
+    'Monday_14-11-22_16-31-03_SAST',  # trees occupying the horizon
+    'Monday_28-11-22_08-48-02_SAST',
+    'Monday_28-11-22_08-29-06_SAST',  # trees occupying the centre
+    'Monday_16-05-22_11-19-06_CEST',
+    'Sunday_15-05-22_17-05-48_CEST',  # trees with openings
+    'Sunday_15-05-22_17-41-05_CEST',
+    'Thursday_19-05-22_16-33-48_CEST',  # trees occupying one side
+    'Thursday_19-05-22_16-54-50_CEST',
+    'Thursday_19-05-22_17-20-24_CEST'  # building occupying one side
+]
+
+
+def plot_all(*datasets, reset_clean=True, reset_mae=True):
     if len(datasets) < 1:
         datasets = default_datasets
 
     reset_clean = reset_clean or not os.path.exists(os.path.join(data_base, "clean_all.csv"))
     reset_mae = reset_mae or not os.path.exists(os.path.join(data_base, "mae_all.csv")) or reset_clean
 
-    if reset_mae:
-        mae_df = None
-        data_frame = {
-            "session": [], "time": [], "location": [], "category": [], "ring_size": [], "unit_type": [],
-            "sun_azimuth": [], "sun_elevation": [], "MAE": [], "dataset": []
-        }
-    else:
-        mae_df = pd.read_csv(os.path.join(data_base, "mae_all.csv"))
-        data_frame = {}
-
-    if reset_clean:
-        clean_df = None
-        dataset_clean = {
-            "session": [], "time": [], "location": [], "category": [], "unit_type": [],
-            "sun_azimuth": [], "sun_elevation": [], "direction": [], "response": [], "dataset": [], "recording": []
-        }
-    else:
-        clean_df = pd.read_csv(os.path.join(data_base, "clean_all.csv"))
-        dataset_clean = {}
-    centre = {}
-
     if reset_clean:
         print("\nRESET CLEAN DATASET:\n--------------------")
+        clean_df = create_clean_csv(*datasets)
+    else:
+        clean_df = pd.read_csv(os.path.join(data_base, "clean_all.csv"))
 
-        for dataset in datasets:
-            df = read_dataset(dataset)
-            print(f"DATASET: {dataset}, {df.shape}")
-            # print(df.columns.to_numpy(dtype=str))
-
-            # Each experiment is represented by a unique image
-            for image_file in np.unique(df["image_file"]):
-                dff = df[df["image_file"] == image_file]
-                print(f"{image_file}", end=': ')
-
-                sun_azi = np.deg2rad(np.mean(dff["sun_azimuth"].to_numpy()))
-                sun_ele = np.deg2rad(np.mean(dff["sun_elevation"].to_numpy()))
-
-                image_file = image_file.replace(".jpg", "")
-                if image_file not in centre:
-                    dfu = dff[np.all([
-                        dff["unit"] != 7,
-                        dff["unit"] != 5,
-                        dff["unit"] != 4,
-                    ], axis=0)]
-
-                    pol_res_, int_res_ = get_sensor_responses(dfu, default_nb_samples)
-                    x_imu = np.linspace(0, 2 * np.pi, 360, endpoint=False)
-                    y_inp = int_res_ - pol_res_
-
-                    est_sun = np.angle(np.nanmean(np.exp(1j * x_imu) * y_inp))
-
-                    centre[image_file] = (est_sun - sun_azi + np.pi) % (2 * np.pi) - np.pi
-
-                    if abs(centre[image_file]) > np.deg2rad(45):
-                        centre[image_file] = 0.
-
-                print(f"sun = {np.rad2deg(sun_azi):.2f}, centre = {np.rad2deg(centre[image_file]):.2f}; "
-                      f"category = {dff['category'].to_numpy()[0]}")
-
-                # nb_recordings x nb_samples
-                pol_res, int_res = get_sensor_responses_per_recording(dff, default_nb_samples,
-                                                                      imu_drift=centre[image_file])
-
-                for i in range(pol_res.shape[0]):
-                    dataset_clean["session"].extend([image_file] * pol_res.shape[1] * 2)
-                    dataset_clean["time"].extend([dff["timestamp"].to_numpy()[0]] * pol_res.shape[1] * 2)
-                    dataset_clean["location"].extend([dff["location"].to_numpy()[0]] * pol_res.shape[1] * 2)
-                    dataset_clean["category"].extend([dff['category'].to_numpy()[0]] * pol_res.shape[1] * 2)
-                    dataset_clean["sun_azimuth"].extend([np.rad2deg(sun_azi)] * pol_res.shape[1] * 2)
-                    dataset_clean["sun_elevation"].extend([np.rad2deg(sun_ele)] * pol_res.shape[1] * 2)
-                    dataset_clean["dataset"].extend([dataset] * pol_res.shape[1] * 2)
-                    dataset_clean["recording"].extend([i + 1] * pol_res.shape[1] * 2)
-                    dataset_clean["unit_type"].extend(["INT"] * pol_res.shape[1] + ["POL"] * pol_res.shape[1])
-                    dataset_clean["direction"].extend(
-                        (np.linspace(0, 360, pol_res.shape[1], endpoint=False) + 180) % 360 - 180)
-                    dataset_clean["response"].extend(int_res[i])
-                    dataset_clean["direction"].extend(
-                        (np.linspace(0, 360, pol_res.shape[1], endpoint=False) + 180) % 360 - 180)
-                    dataset_clean["response"].extend(pol_res[i])
-
-        clean_df = pd.DataFrame(dataset_clean)
-        clean_df.to_csv(os.path.join(data_base, "clean_all.csv"), index=False)
-
-        print(f"Saved clean dataset at: {os.path.join(data_base, 'clean_all.csv')}\n")
+    if reset_mae:
+        print("\nRESET MAE DATASET:\n------------------")
+        create_errors_csv(*datasets, clean_df)
 
     print("\nPLOTTING DATA:\n--------------")
-    for ring_size in range(3, 61):
+    for ring_size in range(60, 2, -1):
 
         for dataset in datasets:
 
@@ -404,7 +118,6 @@ def plot_all(*datasets, reset_clean=False, reset_mae=True):
                 print(f"{image_file} (ring = {ring_size})", end=': ')
 
                 sun_azi = np.deg2rad(np.mean(dfs["sun_azimuth"].to_numpy()))
-                sun_ele = np.deg2rad(np.mean(dfs["sun_elevation"].to_numpy()))
 
                 pol_res = dfs[dfs["unit_type"] == "POL"]
                 int_res = dfs[dfs["unit_type"] == "INT"]
@@ -422,37 +135,6 @@ def plot_all(*datasets, reset_clean=False, reset_mae=True):
                 ang_ipp, x_ipp = compute_sensor_output_from_responses(
                     pol_res, int_res, ring_size, polarisation=False, intensity=False)
 
-                category = dfs['category'].to_numpy()[0]
-                if reset_mae:
-
-                    mae_pol = np.rad2deg(compare(x_pol + sun_azi, ang_pol, absolute=True))
-                    mae_int = np.rad2deg(compare(x_int + sun_azi, ang_int, absolute=True))
-                    mae_inp = np.rad2deg(compare(x_inp + sun_azi, ang_inp, absolute=True))
-                    mae_ipp = np.rad2deg(compare(x_ipp + sun_azi, ang_ipp, absolute=True))
-
-                    data_frame["session"].extend([image_file] * 4)
-                    data_frame["time"].extend([dfs["time"].to_numpy()[0]] * 4)
-                    data_frame["location"].extend([dfs["location"].to_numpy()[0]] * 4)
-                    data_frame["category"].extend([category] * 4)
-                    data_frame["ring_size"].extend([ring_size] * 4)
-                    data_frame["sun_azimuth"].extend([np.rad2deg(sun_azi)] * 4)
-                    data_frame["sun_elevation"].extend([np.rad2deg(sun_ele)] * 4)
-                    data_frame["dataset"].extend([dataset] * 4)
-                    data_frame["unit_type"].extend(["INT", "POL", "INT-POL", "INT+POL"])
-                    data_frame["MAE"].extend([mae_int, mae_pol, mae_inp, mae_ipp])
-                else:
-                    dfi = mae_df[mae_df["session"] == image_file]
-
-                    mae_pol = dfi[dfi["unit_type"] == "POL"]
-                    mae_int = dfi[dfi["unit_type"] == "INT"]
-                    mae_inp = dfi[dfi["unit_type"] == "INT-POL"]
-                    mae_ipp = dfi[dfi["unit_type"] == "INT+POL"]
-
-                print(f"MAE = {mae_int:.2f} (INT), {mae_pol:.2f} (POL), "
-                      f"{mae_inp:.2f} (INT-POL), {mae_ipp:.2f} (INT+POL); "
-                      f"sun = {np.rad2deg(sun_azi):.2f}; "
-                      f"category = {category}")
-
                 mosaic = [["image", "image", "int", "pol", "int-pol", "."],
                           ["image", "image", "int_pred", "pol_pred", "int-pol_pred", "int+pol_pred"]]
 
@@ -469,7 +151,7 @@ def plot_all(*datasets, reset_clean=False, reset_mae=True):
 
                 for r in range(pol_res.shape[0]):
 
-                    x_imu = np.linspace(0, 2 * np.pi, default_nb_samples, endpoint=False)
+                    x_imu = np.linspace(0, 2 * np.pi, pol_res.shape[1], endpoint=False)
                     y_pol = pol_res[r]
                     y_iny = int_res[r]
                     y_inp = int_res[r] - pol_res[r]
@@ -503,9 +185,865 @@ def plot_all(*datasets, reset_clean=False, reset_mae=True):
                 outpath = os.path.join(outpath, image_file.replace(".jpg", f"_rs{ring_size:02d}.svg"))
                 fig.savefig(outpath, bbox_inches="tight")
                 plt.show()
-        if reset_mae:
-            mae_df = pd.DataFrame(data_frame)
-            mae_df.to_csv(os.path.join(data_base, "mae_all.csv"), index=False)
+
+
+def plot_responses(*datasets, calculate_predictions=True, figure=None, ring_size=20):
+
+    if len(datasets) < 1:
+        datasets = default_datasets
+        dataset = "all"
+    else:
+        dataset = '+'.join(datasets)
+
+    clean_df = pd.read_csv(os.path.join(data_base, "clean_all.csv"))
+
+    df = clean_df[np.any([clean_df["dataset"] == ds for ds in datasets], axis=0)]
+
+    if figure is None:
+        image_files = np.unique(df["session"])
+    elif figure in [2, '2']:
+        image_files = figure_2_selected
+    elif figure == "solar-elevation":
+        image_files = solar_elevation_selected
+    elif figure == "cloud-level":
+        image_files = cloud_level_selected
+    elif figure == "occlusion-level":
+        image_files = occlusion_level_selected
+
+    mosaic = [[image_file, f"{image_file} int", f"{image_file} pol", f"{image_file} int-pol"]
+              for image_file in image_files]
+
+    fig, ax = plt.subplot_mosaic(mosaic, figsize=(9, 2 * len(image_files)),
+                                 subplot_kw={'projection': 'polar'})
+
+    for imf, image_file in enumerate(image_files):
+        dfs = df[df["session"] == image_file]
+        dfs["direction"] = dfs["direction"] % 360
+        print(f"{image_file}")
+
+        sun_azi = np.deg2rad(np.mean(dfs["sun_azimuth"].to_numpy()))
+
+        pol_res = dfs[dfs["unit_type"] == "POL"]
+        int_res = dfs[dfs["unit_type"] == "INT"]
+
+        pol_res = pol_res.pivot(index="recording", columns="direction", values="response").to_numpy()
+        int_res = int_res.pivot(index="recording", columns="direction", values="response").to_numpy()
+
+        ax[image_file].remove()
+        ax[image_file] = plt.subplot(len(image_files), 4, imf * 4 + 1)
+
+        plot_image(image_file + ".jpg", dataset, axis=ax[image_file])
+
+        if calculate_predictions:
+            # nb_recordings x nb_samples
+            ang_pol, x_pol = compute_sensor_output_from_responses(
+                pol_res, int_res, ring_size, polarisation=True, intensity=False)
+            ang_int, x_int = compute_sensor_output_from_responses(
+                pol_res, int_res, ring_size, polarisation=False, intensity=True)
+            ang_inp, x_inp = compute_sensor_output_from_responses(
+                pol_res, int_res, ring_size, polarisation=True, intensity=True)
+
+            pol_q25, pol_q50, pol_q75 = circ_quantiles(ang_pol - x_pol, axis=-1)
+            int_q25, int_q50, int_q75 = circ_quantiles(ang_int - x_int, axis=-1)
+            inp_q25, inp_q50, inp_q75 = circ_quantiles(ang_inp - x_inp, axis=-1)
+        else:
+            pol_q25, pol_q50, pol_q75 = [[None] * pol_res.shape[0]] * 3
+            int_q25, int_q50, int_q75 = [[None] * pol_res.shape[0]] * 3
+            inp_q25, inp_q50, inp_q75 = [[None] * pol_res.shape[0]] * 3
+
+        for r in range(pol_res.shape[0]):
+            x_imu = np.linspace(0, 2 * np.pi, pol_res.shape[1], endpoint=False)
+            y_pol = pol_res[r]
+            y_iny = int_res[r]
+            y_inp = int_res[r] - pol_res[r]
+
+            plot_responses_over_imu(
+                x_imu, y_pol, axis=ax[f"{image_file} pol"], color=p_colour,
+                prediction=pol_q50[r], error=(pol_q25[r], pol_q75[r]),
+                c=r, sun=sun_azi, x_ticks=False, filtered=False, negative=True)
+            plot_responses_over_imu(
+                x_imu, y_iny, axis=ax[f"{image_file} int"], color=i_colour,
+                prediction=int_q50[r], error=(int_q25[r], int_q75[r]),
+                c=r, sun=sun_azi, x_ticks=False, filtered=False)
+            plot_responses_over_imu(
+                x_imu, y_inp, axis=ax[f"{image_file} int-pol"], color=c_colour,
+                prediction=inp_q50[r], error=(inp_q25[r], inp_q75[r]),
+                c=r, sun=sun_azi, x_ticks=False, filtered=False)
+
+    # Add text
+    ax[f"{image_files[0]} pol"].set_title("POL", fontsize=8)
+    ax[f"{image_files[0]} int"].set_title("INT", fontsize=8)
+    ax[f"{image_files[0]} int-pol"].set_title("INT-POL", fontsize=8)
+    fig.tight_layout()
+
+    outpath = os.path.join(out_base, "all")
+    if not os.path.exists(outpath):
+        os.makedirs(outpath)
+
+    if figure is None:
+        figure = 'none'
+
+    fig.savefig(os.path.join(outpath, f"{dataset}-{figure}-responses.svg"), bbox_inches="tight")
+    fig.savefig(os.path.join(outpath, f"{dataset}-{figure}-responses.png"), bbox_inches="tight")
+
+    plt.show()
+
+
+def plot_mae_circ(*datasets, unit_type="INT-POL", metric="mean absolute error", ring_size=20):
+
+    global min_rs, max_rs
+
+    if len(datasets) < 1:
+        datasets = default_datasets
+
+    metric = metric.replace(" ", "_")
+    absolute = metric in ["mean_absolute_error", "root_mean_square_error", "max_error"] or "sd" in metric
+    # scale = np.pi if "sd" in metric.lower() else 1.
+    scale = 1.
+
+    mae_df = pd.read_csv(os.path.join(data_base, "mae_all.csv"))
+
+    # select dataset from the requested dataset
+    mae_df = mae_df[np.any([mae_df["dataset"] == ds for ds in datasets], axis=0)]
+
+    # exclude the INT+POL response
+    mae_df = mae_df[mae_df["unit_type"] != "INT+POL"]
+
+    # transform time to the correct format
+    mae_df["time"] = pd.to_datetime(mae_df["time"])
+
+    # correct the scale for SD data
+    mae_df[metric] *= scale
+
+    mosaic = [["ring_size", "sun_ele"],
+              ["clouds", "canopies"]]
+    fig, ax = plt.subplot_mosaic(mosaic, figsize=(6, 5), subplot_kw={'projection': 'polar'})
+
+    df_select = mae_df[np.all([
+        mae_df["cloud_status"] < 3,
+        mae_df["canopy_status"] < 2,
+        np.isclose(mae_df["tilt"], 0),
+        mae_df["sun_elevation"] >= 10,
+        mae_df["sun_elevation"] <= 80,
+        mae_df["category"] == "tod",
+        mae_df["unit_type"] == unit_type
+    ], axis=0)]
+
+    plot_prediction_bars(df_select, x=metric, y="ring_size", cmap='viridis', axis=ax["ring_size"],
+                         title="number of units", absolute=absolute)
+
+    # sun elevation
+    df_select = mae_df[np.all([
+        mae_df["cloud_status"] < 3,
+        mae_df["canopy_status"] < 2,
+        np.isclose(mae_df["tilt"], 0),
+        mae_df["ring_size"] == ring_size,
+        mae_df["unit_type"] == unit_type
+    ], axis=0)]
+
+    ele_bins = np.linspace(-10, 90, 21)
+    ele_labels = np.linspace(-5, 90, 20, dtype=int)
+    df_select["ele_bins"] = pd.cut(x=df_select["sun_elevation"], bins=ele_bins, labels=ele_labels, include_lowest=True)
+
+    plot_prediction_bars(df_select, x=metric, y="ele_bins", cmap='viridis', axis=ax["sun_ele"],
+                         title="sun elevation", absolute=absolute)
+
+    df_select = mae_df[np.all([
+        mae_df["canopy_status"] < 2,
+        np.isclose(mae_df["tilt"], 0),
+        mae_df["ring_size"] == ring_size,
+        mae_df["sun_elevation"] > 5,
+        mae_df["unit_type"] == unit_type
+    ], axis=0)]
+
+    plot_prediction_bars(df_select, x=metric, y="cloud_status", cmap='tab10', axis=ax["clouds"],
+                         title="cloud cover", absolute=absolute)
+
+    df_select = mae_df[np.all([
+        mae_df["cloud_status"] < 3,
+        np.isclose(mae_df["tilt"], 0),
+        mae_df["ring_size"] == ring_size,
+        mae_df["sun_elevation"] > 5,
+        mae_df["unit_type"] == unit_type
+    ], axis=0)]
+
+    plot_prediction_bars(df_select, x=metric, y="canopy_status", cmap='Dark2', axis=ax["canopies"],
+                         title="canopy level", absolute=absolute)
+
+    fig.tight_layout()
+
+    outpath = os.path.join(out_base, "all")
+    if not os.path.exists(outpath):
+        os.makedirs(outpath)
+
+    if datasets == default_datasets:
+        dataset = 'all'
+    else:
+        dataset = '+'.join(datasets)
+
+    filename = f"{dataset}-{metric.lower()}-{unit_type.lower()}-u{ring_size:02d}-{'mae' if absolute else 'sun'}"
+
+    fig.savefig(os.path.join(outpath, f"{filename}.svg"), bbox_inches="tight")
+    fig.savefig(os.path.join(outpath, f"{filename}.png"), bbox_inches="tight")
+
+    plt.show()
+
+
+def plot_circ_summary(*datasets, plot_type, unit_type=None, default_ring_size=16):
+
+    global min_rs, max_rs
+
+    if len(datasets) < 1:
+        datasets = default_datasets
+
+    metric = "mean_error"
+
+    error_df = pd.read_csv(os.path.join(data_base, "mae_all.csv"))
+
+    # select dataset from the requested dataset
+    error_df = error_df[np.any([error_df["dataset"] == ds for ds in datasets], axis=0)]
+
+    # exclude the INT+POL response
+    error_df = error_df[error_df["unit_type"] != "INT+POL"]
+
+    # transform time to the correct format
+    error_df["time"] = pd.to_datetime(error_df["time"])
+
+    if unit_type is None:
+        unit_type = ["INT", "POL", "INT-POL"]
+    elif not isinstance(unit_type, list):
+        unit_type = [unit_type]
+
+    select = [np.any([
+        error_df["unit_type"] == ut for ut in unit_type
+    ], axis=0)]
+
+    if plot_type == "units":
+
+        select += [
+            np.isclose(error_df["tilt"], 0),
+            error_df["sun_elevation"] >= 10,
+            error_df["sun_elevation"] <= 80,
+            np.any([
+                error_df["ring_size"] == 3,
+                error_df["ring_size"] == 4,
+                error_df["ring_size"] == 5,
+                error_df["ring_size"] == 8,
+                error_df["ring_size"] == 16,
+                error_df["ring_size"] == 24,
+                error_df["ring_size"] == 60,
+            ], axis=0)
+        ]
+
+        df_select = error_df[np.all(select, axis=0)]
+
+        category = "ring_size"
+        cmap = "cloud_status"
+        emap = "canopy_status"
+        cat_list = np.unique(df_select["ring_size"])
+    elif plot_type == "solar-elevation":
+        select += [
+            np.isclose(error_df["tilt"], 0),
+            error_df["ring_size"] == default_ring_size
+        ]
+
+        df_select = error_df[np.all(select, axis=0)]
+
+        ele_bins = np.linspace(-10, 90, 21)
+        ele_labels = np.linspace(-5, 90, 20, dtype=int)
+        df_select["ele_bins"] = pd.cut(x=df_select["sun_elevation"], bins=ele_bins, labels=ele_labels, include_lowest=True)
+
+        category = "ele_bins"
+        cmap = "cloud_status"
+        emap = "canopy_status"
+        cat_list = np.unique(df_select["ele_bins"])
+    elif plot_type == "cloud-level":
+
+        select += [
+            error_df["sun_elevation"] >= 10,
+            error_df["sun_elevation"] <= 80,
+            np.isclose(error_df["tilt"], 0),
+            error_df["ring_size"] == default_ring_size
+        ]
+
+        df_select = error_df[np.all(select, axis=0)]
+
+        category = "cloud_status"
+        cmap = "sun_elevation"
+        emap = "canopy_status"
+        cat_list = np.unique(df_select["cloud_status"])
+    elif plot_type == "occlusion-level":
+
+        select += [
+            error_df["sun_elevation"] >= 10,
+            error_df["sun_elevation"] <= 80,
+            np.isclose(error_df["tilt"], 0),
+            error_df["ring_size"] == default_ring_size
+        ]
+
+        df_select = error_df[np.all(select, axis=0)]
+
+        category = "canopy_status"
+        emap = "sun_elevation"
+        cmap = "cloud_status"
+        cat_list = np.unique(df_select["canopy_status"])
+    else:
+        return
+
+    mosaic = []
+    for cat in cat_list:
+        mosaic.append([])
+        for ut in unit_type:
+            mosaic[-1].append(f"{cat}-{ut}")
+
+    fig, ax = plt.subplot_mosaic(mosaic, figsize=(2 * len(unit_type), 2 * len(cat_list)),
+                                 subplot_kw={'projection': 'polar'})
+
+    show_title = True
+    for cat in cat_list:
+        print(cat)
+        for ut in unit_type:
+            axn = ax[f"{cat}-{ut}"]
+
+            dfs = df_select[np.all([df_select[category] == cat, df_select["unit_type"] == ut], axis=0)]
+
+            if show_title:
+                kwargs = {"title": ut}
+            else:
+                kwargs = {}
+            plot_prediction_bars2(dfs, x=metric, y="time", axis=axn, cmap=cmap, emap=emap, **kwargs)
+        show_title = False
+
+    fig.tight_layout()
+
+    outpath = os.path.join(out_base, "all")
+    if not os.path.exists(outpath):
+        os.makedirs(outpath)
+
+    if datasets == default_datasets:
+        dataset = 'all'
+    else:
+        dataset = '+'.join(datasets)
+
+    filename = f"{dataset}-{plot_type}-summary"
+
+    fig.savefig(os.path.join(outpath, f"{filename}.svg"), bbox_inches="tight")
+    fig.savefig(os.path.join(outpath, f"{filename}.png"), bbox_inches="tight")
+
+    plt.show()
+
+
+def plot_error_boxes(*datasets, unit_type="INT-POL", metric="mean absolute error",
+                     plot_type="solar-elevation", default_ring_size=8):
+
+    if len(datasets) < 1:
+        datasets = default_datasets
+
+    metric = metric.lower().replace(" ", "_")
+
+    error_df = pd.read_csv(os.path.join(data_base, "error_fz_eig.csv"))
+
+    # select dataset from the requested dataset
+    error_df = error_df[np.any([error_df["dataset"] == ds for ds in datasets], axis=0)]
+
+    # exclude the INT+POL response
+    error_df = error_df[error_df["unit_type"] != "INT+POL"]
+
+    if datasets == default_datasets:
+        dataset = 'all'
+    else:
+        dataset = '+'.join(datasets)
+
+    filename = f"{dataset}-{metric}-{unit_type}-{plot_type}"
+
+    if plot_type != "model-comparison":
+        fig = plt.figure(filename, figsize=(3, 2))
+
+    if plot_type == "units":
+        df_select = error_df[np.all([
+            error_df["cloud_status"] < 3,
+            error_df["canopy_status"] < 2,
+            np.isclose(error_df["tilt"], 0),
+            error_df["sun_elevation"] >= 10,
+            error_df["sun_elevation"] <= 80,
+            error_df["unit_type"] == unit_type,
+            error_df["category"] == "tod",
+            np.any([
+                error_df["ring_size"] == 3,
+                error_df["ring_size"] == 4,
+                error_df["ring_size"] == 5,
+                error_df["ring_size"] == 8,
+                error_df["ring_size"] == 16,
+                error_df["ring_size"] == 24,
+                error_df["ring_size"] == 60,
+            ], axis=0)
+        ], axis=0)]
+
+        sb.boxplot(df_select, x="ring_size", y=metric, palette='viridis')
+        print(df_select.groupby(by="ring_size")[metric].median())
+
+        plt.yscale('symlog', base=2)
+        if "absolute" in metric or "square" in metric or "sd" in metric:
+            plt.yticks([1, 4, 15, 60], ["1", "4", "15", "60"])
+            plt.ylim([0, 90])
+        else:
+            plt.yticks([-60, -15, -4, 0, 4, 15, 60], ["-60", "-15", "-4", "0", "4", "15", "60"])
+            plt.ylim([-90, 90])
+    elif plot_type == "solar-elevation":  # solar elevation
+
+        # sun elevation
+        df_select = error_df[np.all([
+            error_df["cloud_status"] < 3,
+            error_df["canopy_status"] < 2,
+            np.isclose(error_df["tilt"], 0),
+            error_df["ring_size"] == default_ring_size,
+            error_df["unit_type"] == unit_type
+        ], axis=0)]
+
+        ele_bins = np.linspace(-10, 90, 21)
+        ele_labels = np.linspace(-5, 90, 20, dtype=int)
+        df_select["ele_bins"] = pd.cut(x=df_select["sun_elevation"], bins=ele_bins, labels=ele_labels, include_lowest=True)
+
+        sb.boxplot(df_select, x="ele_bins", y=metric, palette='viridis')
+        # print(df_select.groupby(by="ele_bins")[metric].median())
+        print(df_select[df_select["ele_bins"] > 10].groupby(by="ele_bins")[metric].median().mean())
+
+        plt.yscale('symlog', base=2)
+        if "absolute" in metric or "square" in metric or "sd" in metric:
+            plt.yticks([1, 4, 15, 60], ["1", "4", "15", "60"])
+            plt.ylim([0, 90])
+        else:
+            plt.yticks([-60, -15, -4, 0, 4, 15, 60], ["-60", "-15", "-4", "0", "4", "15", "60"])
+            plt.ylim([-90, 90])
+    elif plot_type == "cloud-level":
+
+        # cloud cover
+        df_select = error_df[np.all([
+            error_df["canopy_status"] < 2,
+            error_df["sun_elevation"] >= 15,
+            np.isclose(error_df["tilt"], 0),
+            error_df["ring_size"] == default_ring_size,
+            error_df["unit_type"] == unit_type
+        ], axis=0)]
+
+        order = [0, 1, 2, 5, 3, 4, 6, 7]
+        sb.boxplot(df_select, x="cloud_status", y=metric, palette='tab10', order=order)
+
+        print(df_select.groupby(by="cloud_status")[metric].median())
+
+        plt.yscale('symlog', base=2)
+        if "absolute" in metric or "square" in metric or "sd" in metric:
+            plt.yticks([1, 4, 16, 64], ["1", "4", "16", "64"])
+            plt.ylim([0, 90])
+        else:
+            plt.yticks([-64, -16, -4, 0, 4, 16, 64], ["-64", "-16", "-4", "0", "4", "16", "64"])
+            plt.ylim([-90, 90])
+    elif plot_type == "occlusion-level":
+
+        # sun elevation
+        df_select = error_df[np.all([
+            error_df["cloud_status"] < 5,
+            error_df["sun_elevation"] >= 15,
+            np.isclose(error_df["tilt"], 0),
+            error_df["ring_size"] == default_ring_size,
+            error_df["unit_type"] == unit_type
+        ], axis=0)]
+
+        sb.boxplot(df_select, x="canopy_status", y=metric, palette='Dark2')
+
+        print(df_select.groupby(by="canopy_status")[metric].median())
+
+        plt.yscale('symlog', base=2)
+        if "absolute" in metric or "square" in metric or "sd" in metric:
+            plt.yticks([1, 4, 16, 64], ["1", "4", "16", "64"])
+            plt.ylim([0, 90])
+        else:
+            plt.yticks([-64, -16, -4, 0, 4, 16, 64], ["-64", "-16", "-4", "0", "4", "16", "64"])
+            plt.ylim([-90, 90])
+    elif plot_type == "model-comparison":
+
+        fig = plt.figure(filename, figsize=(6, 2))
+
+        clouds = [[0, 1, 2], [3, 4, 5, 6, 7]]
+        occlusion = [[0, 1], [2, 3, 4, 5]]
+        solar = [[0, 1], [2]]
+        ring_sizes = [default_ring_size, 36]
+
+        df_select = error_df[np.all([
+            error_df["sun_elevation"] >= 15,
+            np.isclose(error_df["tilt"], 0),
+            np.any([error_df["ring_size"] == default_ring_size,
+                    error_df["ring_size"] == 36], axis=0)
+        ], axis=0)]
+
+        sky_condition = df_select["cloud_status"].to_numpy() * np.nan
+        sky_condition[np.all([
+            np.any([df_select["cloud_status"] == c for c in clouds[0]], axis=0),
+            np.any([df_select["canopy_status"] == c for c in occlusion[0]], axis=0),
+            np.any([df_select["sun_status"] == c for c in solar[0]], axis=0)
+        ], axis=0)] = 0  # clear
+        sky_condition[np.all([
+            np.any([df_select["cloud_status"] == c for c in clouds[1]], axis=0),
+            np.any([df_select["canopy_status"] == c for c in occlusion[0]], axis=0),
+            np.any([df_select["sun_status"] == c for c in solar[0]], axis=0)
+        ], axis=0)] = 1  # cloudy
+        sky_condition[np.all([
+            np.any([df_select["cloud_status"] == c for c in clouds[0]], axis=0),
+            np.any([df_select["canopy_status"] == c for c in occlusion[1]], axis=0),
+            np.any([df_select["sun_status"] == c for c in solar[0]], axis=0)
+        ], axis=0)] = 2  # occluded
+        sky_condition[np.any([
+            np.any([df_select["sun_status"] == c for c in solar[1]], axis=0)
+        ], axis=0)] = 3  # solar or anti-solar meridian is hidden
+        df_select["sky_condition"] = sky_condition
+        df_select = df_select.dropna(axis=0)
+
+        for i, ring_size in enumerate(ring_sizes):
+            ax = plt.subplot(121 + i)
+
+            dfs = df_select[df_select["ring_size"] == ring_size]
+
+            palette_body = {"POL": p_colour, "INT": i_colour, "INT-POL": c_colour,
+                            "FZ": z_colour, "EIG": e_colour}
+            sb.boxplot(dfs, x="sky_condition", y=metric, hue="unit_type", palette=palette_body,
+                       hue_order=["INT-POL", "POL", "INT", "EIG", "FZ"], fliersize=.5, ax=ax)
+
+            print(f"Number of devices: {ring_size}")
+            print(dfs.groupby(by=["unit_type", "sky_condition"])[metric].median())
+
+            plt.yscale('symlog', base=2)
+            if "absolute" in metric or "square" in metric or "sd" in metric:
+                plt.yticks([1, 4, 16, 64], ["1", "4", "16", "64"])
+                plt.ylim([0, 90])
+            else:
+                plt.yticks([-64, -16, -4, 0, 4, 16, 64], ["-64", "-16", "-4", "0", "4", "16", "64"])
+                plt.ylim([-90, 90])
+
+            ax.legend_.remove()
+
+    elif plot_type == "location":
+
+        df_select = error_df[np.all([
+            error_df["cloud_status"] < 6,
+            error_df["canopy_status"] < 2,
+            np.isclose(error_df["tilt"], 0),
+            error_df["sun_elevation"] >= 15,
+            error_df["unit_type"] == unit_type,
+            # error_df["category"] == "tod",
+            error_df["ring_size"] == default_ring_size
+        ], axis=0)]
+
+        sb.boxplot(df_select, x="location", y=metric, palette='Dark2')
+
+        print(df_select.groupby(by="location")[metric].median())
+
+        plt.yscale('symlog', base=2)
+        if "absolute" in metric or "square" in metric or "sd" in metric:
+            plt.yticks([1, 4, 15, 60], ["1", "4", "15", "60"])
+            plt.ylim([0, 90])
+        else:
+            plt.yticks([-60, -15, -4, 0, 4, 15, 60], ["-60", "-15", "-4", "0", "4", "15", "60"])
+            plt.ylim([-90, 90])
+
+    outpath = os.path.join(out_base, "all")
+    if not os.path.exists(outpath):
+        os.makedirs(outpath)
+
+    fig.savefig(os.path.join(outpath, f"{filename}.svg"), bbox_inches="tight")
+    fig.savefig(os.path.join(outpath, f"{filename}.png"), bbox_inches="tight")
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_error_lines(*datasets, unit_type="INT-POL", metric="mean absolute error",
+                     plot_type="solar-elevation", default_ring_size=8):
+
+    if len(datasets) < 1:
+        datasets = default_datasets
+
+    metric = metric.lower().replace(" ", "_")
+
+    error_df = pd.read_csv(os.path.join(data_base, "mae_all.csv"))
+
+    # select dataset from the requested dataset
+    error_df = error_df[np.any([error_df["dataset"] == ds for ds in datasets], axis=0)]
+
+    # exclude the INT+POL response
+    error_df = error_df[error_df["unit_type"] != "INT+POL"]
+
+    if datasets == default_datasets:
+        dataset = 'all'
+    else:
+        dataset = '+'.join(datasets)
+
+    filename = f"{dataset}-{metric}-{unit_type}-{plot_type}-line"
+
+    fig = plt.figure(filename, figsize=(3, 2))
+
+    if plot_type == "units":
+        df_select = error_df[np.all([
+            error_df["cloud_status"] < 3,
+            error_df["canopy_status"] < 2,
+            np.isclose(error_df["tilt"], 0),
+            error_df["sun_elevation"] >= 15,
+            error_df["unit_type"] == unit_type,
+            error_df["category"] == "tod",
+        ], axis=0)]
+
+        # y_q25 = df_select.groupby("ring_size")[metric].quantile(.25)
+        y_q50 = df_select.groupby("ring_size")[metric].median()
+        # y_q75 = df_select.groupby("ring_size")[metric].quantile(.75)
+        size = df_select.shape[0]
+        print(size)
+        df_sample = df_select.iloc[np.random.permutation(size)[:500]]
+
+        sb.regplot(df_sample, x="ring_size", y=metric, fit_reg=False, x_jitter=.5,
+                   scatter_kws={'color': 'black', 'alpha': 0.1, 's': 5})
+        # plt.fill_between(y_q50.index.to_numpy(), y_q25.to_numpy(), y_q75.to_numpy(),
+        #                  facecolor='black', alpha=0.2)
+        plt.plot(y_q50.index.to_numpy(), y_q50.to_numpy(), color='black', lw=2)
+
+        # sb.boxplot(df_select, x="ring_size", y=metric, palette='viridis')
+        print(df_select.groupby(by="ring_size")[metric].median())
+
+        plt.yscale('symlog', base=2)
+        plt.xscale('log', base=6)
+        plt.xlim(np.min(y_q50.index.to_numpy()), np.max(y_q50.index.to_numpy()))
+        plt.xticks([3, 5, 8, 12, 20, 36, 60], ['3', '5', '8', '12', '20', '36', '60'])
+        if "absolute" in metric or "square" in metric or "sd" in metric:
+            plt.yticks([1, 4, 16, 64], ["1", "4", "16", "64"])
+            plt.ylim([0, 90])
+        else:
+            plt.yticks([-64, -16, -4, 0, 4, 16, 64], ["-64", "-16", "-4", "0", "4", "16", "64"])
+            plt.ylim([-90, 90])
+    elif plot_type == "solar-elevation":  # solar elevation
+
+        # sun elevation
+        df_select = error_df[np.all([
+            error_df["cloud_status"] < 5,
+            error_df["canopy_status"] < 2,
+            np.isclose(error_df["tilt"], 0),
+            error_df["ring_size"] == default_ring_size,
+            error_df["unit_type"] == unit_type
+        ], axis=0)]
+
+        ele_bins = np.linspace(-10, 90, 21)
+        ele_labels = np.linspace(-5, 90, 20, dtype=int)
+        df_select["ele_bins"] = pd.cut(x=df_select["sun_elevation"], bins=ele_bins, labels=ele_labels, include_lowest=True)
+
+        # y_q25 = df_select.groupby("ring_size")[metric].quantile(.25)
+        y_q50 = df_select.groupby("ele_bins")[metric].median()
+        # y_q75 = df_select.groupby("ring_size")[metric].quantile(.75)
+        size = df_select.shape[0]
+        df_sample = df_select.iloc[np.random.permutation(size)[:500]]
+
+        print(y_q50.index.to_numpy())
+        sb.regplot(df_sample, x="sun_elevation", y=metric, fit_reg=False, x_jitter=1,
+                   scatter_kws={'color': 'black', 'alpha': 0.1, 's': 5})
+        # plt.fill_between(y_q50.index.to_numpy(), y_q25.to_numpy(), y_q75.to_numpy(),
+        #                  facecolor='black', alpha=0.2)
+        plt.plot(y_q50.index.to_numpy(), y_q50.to_numpy(), color='black', lw=2)
+
+        # sb.boxplot(df_select, x="ring_size", y=metric, palette='viridis')
+        print(df_select.groupby(by="ele_bins")[metric].median())
+
+        plt.yscale('symlog', base=2)
+        # plt.xscale('symlog', base=2)
+        plt.xlim(np.min(y_q50.index.to_numpy()), np.max(y_q50.index.to_numpy()))
+        plt.xticks([0, 15, 30, 60, 85], ['0', '', '30', '60', '85'])
+        if "absolute" in metric or "square" in metric or "sd" in metric:
+            plt.yticks([1, 4, 16, 64], ["1", "4", "16", "64"])
+            plt.ylim([0, 90])
+        else:
+            plt.yticks([-64, -16, -4, 0, 4, 16, 64], ["-64", "-16", "-4", "0", "4", "16", "64"])
+            plt.ylim([-90, 90])
+    elif plot_type == "cloud-level":
+
+        # cloud cover
+        df_select = error_df[np.all([
+            error_df["canopy_status"] < 2,
+            error_df["sun_elevation"] >= 10,
+            error_df["sun_elevation"] <= 80,
+            np.isclose(error_df["tilt"], 0),
+            error_df["ring_size"] == default_ring_size,
+            error_df["unit_type"] == unit_type
+        ], axis=0)]
+
+        sb.boxplot(df_select, x="cloud_status", y=metric, palette='tab10')
+
+        print(df_select.groupby(by="cloud_status")[metric].median())
+
+        plt.yscale('symlog', base=2)
+        if "absolute" in metric or "square" in metric or "sd" in metric:
+            plt.yticks([1, 4, 15, 60], ["1", "4", "15", "60"])
+            plt.ylim([0, 90])
+        else:
+            plt.yticks([-60, -15, -4, 0, 4, 15, 60], ["-60", "-15", "-4", "0", "4", "15", "60"])
+            plt.ylim([-90, 90])
+    elif plot_type == "occlusion-level":
+
+        # sun elevation
+        df_select = error_df[np.all([
+            error_df["cloud_status"] < 3,
+            error_df["sun_elevation"] >= 10,
+            error_df["sun_elevation"] <= 80,
+            np.isclose(error_df["tilt"], 0),
+            error_df["ring_size"] == default_ring_size,
+            error_df["unit_type"] == unit_type
+        ], axis=0)]
+
+        sb.boxplot(df_select, x="canopy_status", y=metric, palette='Dark2')
+
+        print(df_select.groupby(by="canopy_status")[metric].median())
+
+        plt.yscale('symlog', base=2)
+        if "absolute" in metric or "square" in metric or "sd" in metric:
+            plt.yticks([1, 4, 15, 60], ["1", "4", "15", "60"])
+            plt.ylim([0, 90])
+        else:
+            plt.yticks([-60, -15, -4, 0, 4, 15, 60], ["-60", "-15", "-4", "0", "4", "15", "60"])
+            plt.ylim([-90, 90])
+    elif plot_type == "location":
+
+        df_select = error_df[np.all([
+            error_df["cloud_status"] < 6,
+            error_df["canopy_status"] < 2,
+            np.isclose(error_df["tilt"], 0),
+            error_df["sun_elevation"] >= 10,
+            error_df["sun_elevation"] <= 85,
+            error_df["unit_type"] == unit_type,
+            # error_df["category"] == "tod",
+            error_df["ring_size"] == default_ring_size
+        ], axis=0)]
+
+        sb.boxplot(df_select, x="location", y=metric, palette='Dark2')
+
+        print(df_select.groupby(by="location")[metric].median())
+
+        plt.yscale('symlog', base=2)
+        if "absolute" in metric or "square" in metric or "sd" in metric:
+            plt.yticks([1, 4, 15, 60], ["1", "4", "15", "60"])
+            plt.ylim([0, 90])
+        else:
+            plt.yticks([-60, -15, -4, 0, 4, 15, 60], ["-60", "-15", "-4", "0", "4", "15", "60"])
+            plt.ylim([-90, 90])
+
+    outpath = os.path.join(out_base, "all")
+    if not os.path.exists(outpath):
+        os.makedirs(outpath)
+
+    fig.savefig(os.path.join(outpath, f"{filename}.svg"), bbox_inches="tight")
+    fig.savefig(os.path.join(outpath, f"{filename}.png"), bbox_inches="tight")
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_mae(*datasets):
+
+    global min_rs, max_rs
+
+    if len(datasets) < 1:
+        datasets = default_datasets
+
+    mae_df = pd.read_csv(os.path.join(data_base, "mae_all_1.csv"))
+    mae_df = mae_df[mae_df["unit_type"] != "INT+POL"]
+    mae_df["time"] = pd.to_datetime(mae_df["time"])
+
+    min_rs = np.min(mae_df["ring_size"])
+    max_rs = np.max(mae_df["ring_size"])
+
+    palette = {rs: cmap_lines(norm_lines(rs)) for rs in range(min_rs, max_rs + 1)}
+
+    unit_type = "INT"
+    metric = "MAE"
+    # metric = "MAE_rel"
+    # metric = "turtuosity"
+    mosaic = [["ring_size", "ring_size"],
+              ["tod", "tod"],
+              ["clouds", "canopies"]]
+    fig, ax = plt.subplot_mosaic(mosaic, figsize=(6, 6))
+
+    df_select = mae_df[np.all([
+        mae_df["cloud status"] < 3,
+        mae_df["canopy status"] < 2,
+        np.isclose(mae_df["tilt"], 0),
+        mae_df["sun_elevation"] >= 10,
+        mae_df["sun_elevation"] <= 80,
+        mae_df["category"] == "tod",
+        mae_df["unit_type"] == unit_type
+    ], axis=0)]
+
+    sb.boxplot(df_select, x="ring_size", y=metric, ax=ax["ring_size"], palette=palette)
+
+    ax["ring_size"].set_yscale('symlog', base=2)
+    ax["ring_size"].set_yticks([1, 4, 15, 60])
+    ax["ring_size"].set_yticklabels(["1", "4", "15", "60"])
+    ax["ring_size"].set_ylim([0, 90])
+    ax["ring_size"].legend([], [], frameon=False)
+
+    palette = {rs: cmap_lines(norm_lines(rs)) for rs in np.linspace(-5, 90, 20)}
+
+    # replace unit_type names to numbers
+    # unit_type = np.where(mae_df["unit_type"][:, None] == [["INT", "POL", "INT-POL"]])[1]
+    # mae_df = mae_df.assign(unit_type=unit_type)
+    df_select = mae_df[np.all([
+        mae_df["cloud status"] < 3,
+        mae_df["canopy status"] < 2,
+        np.isclose(mae_df["tilt"], 0),
+        mae_df["ring_size"] == 20,
+        mae_df["unit_type"] == unit_type
+    ], axis=0)]
+
+    ele_bins = np.linspace(-10, 90, 21)
+    ele_labels = np.linspace(-5, 90, 20, dtype=int)
+    df_select["ele_bins"] = pd.cut(x=df_select["sun_elevation"], bins=ele_bins, labels=ele_labels, include_lowest=True)
+
+    sb.boxplot(df_select, x="ele_bins", y=metric, ax=ax["tod"], palette=palette)
+
+    ax["tod"].set_yscale('symlog', base=2)
+    ax["tod"].set_yticks([1, 4, 15, 60])
+    ax["tod"].set_yticklabels(["1", "4", "15", "60"])
+    ax["tod"].set_ylim([0, 90])
+    ax["tod"].legend([], [], frameon=False)
+
+    palette = {rs: cmap_lines(norm_lines(rs)) for rs in range(0, 10)}
+
+    df_select = mae_df[np.all([
+        mae_df["canopy status"] < 2,
+        np.isclose(mae_df["tilt"], 0),
+        mae_df["ring_size"] == 20,
+        mae_df["sun_elevation"] > 5,
+        mae_df["unit_type"] == unit_type
+    ], axis=0)]
+
+    sb.boxplot(df_select, x="cloud status", y=metric, ax=ax["clouds"], palette=palette)
+
+    ax["clouds"].set_yscale('symlog', base=2)
+    ax["clouds"].set_yticks([1, 4, 15, 60])
+    ax["clouds"].set_yticklabels(["1", "4", "15", "60"])
+    ax["clouds"].set_ylim([0, 90])
+    ax["clouds"].legend([], [], frameon=False)
+
+    df_select = mae_df[np.all([
+        mae_df["cloud status"] < 3,
+        np.isclose(mae_df["tilt"], 0),
+        mae_df["ring_size"] == 20,
+        mae_df["sun_elevation"] > 5,
+        mae_df["unit_type"] == unit_type
+    ], axis=0)]
+    sb.boxplot(df_select, x="canopy status", y=metric, ax=ax["canopies"], palette=palette)
+
+    ax["canopies"].set_yscale('symlog', base=2)
+    ax["canopies"].set_yticks([1, 4, 15, 60])
+    ax["canopies"].set_yticklabels(["", "", "", ""])
+    ax["canopies"].set_ylabel(None)
+    ax["canopies"].set_ylim([0, 90])
+    ax["canopies"].legend([], [], frameon=False)
+
+    plt.tight_layout()
+    plt.show()
 
 
 def plot_summary_mae(*datasets, category="tod", fig=None, ax=None, show=False, save=False):
@@ -514,7 +1052,7 @@ def plot_summary_mae(*datasets, category="tod", fig=None, ax=None, show=False, s
 
     figs, axs = [], []
     for dataset in datasets:
-        df = read_dataset(dataset)
+        df = read_csv_dataset(dataset)
         df = df[df["unit"] != 7]
         print(f"DATASET: {dataset}, {df.shape}")
         # print(df.columns.to_numpy(dtype=str))
@@ -743,9 +1281,9 @@ def plot_image(image_name, data_set=None, axis=None, draw_sun=True):
             directory = data_set
         img = mpimg.imread(os.path.join(data_base, directory, image_name))
         axis.imshow(img, origin="lower")
-        axis.set_title(image_name.split(".")[0].replace("_", " "))
+        axis.set_title(image_name.split(".")[0].replace("_", " "), fontsize=8)
     else:
-        axis.set_title("No image found")
+        axis.set_title("No image found", fontsize=8)
 
     axis.set_xticks([])
     axis.set_yticks([])
@@ -753,11 +1291,34 @@ def plot_image(image_name, data_set=None, axis=None, draw_sun=True):
     return axis
 
 
-def plot_responses_over_imu(x, y, sun=None, negative=False, axis=None, c=0, y_padding=.1, x_ticks=True,
-                            y_min=-1, y_max=1, filtered=False):
+def plot_circ_error_bars(theta, rho, errors, color='black', edge_color='black', alpha=1., axis=None):
+    q25, q75 = circ_norm(np.asanyarray(errors))
+    q25 += 2 * np.pi
+    q75 -= 2 * np.pi
+    while q75 < theta and not np.isclose(q75, theta):
+        q75 += 2 * np.pi
+    while q25 > theta and not np.isclose(q25, theta):
+        q25 -= 2 * np.pi
+
+    nb_samples = int(np.rad2deg(q75 - q25))
+
+    if nb_samples % 2 == 0:  # ensure its odd
+        nb_samples += 1
+
+    ang = np.linspace(q25, q75, nb_samples)
+
+    axis.plot(ang, rho * np.ones_like(ang), color=edge_color, lw=1, alpha=alpha, zorder=1)
+    axis.plot(theta, rho, color=edge_color, markerfacecolor=color, alpha=alpha, zorder=1,
+              marker=(3, 0, -np.rad2deg(theta)), markersize=3)
+
+
+def plot_responses_over_imu(x, y, sun=None, negative=False, prediction=None, error=None, axis=None,
+                            c=0, color="red", y_padding=.1, x_ticks=True, y_min=-1, y_max=1, filtered=False):
 
     if axis is None:
         axis = plt.subplot(111)
+
+    max_recording = 15
 
     axis.set_theta_direction(-1)
     axis.set_theta_zero_location("N")
@@ -768,37 +1329,155 @@ def plot_responses_over_imu(x, y, sun=None, negative=False, axis=None, c=0, y_pa
     x = x[i_sort]
     r = y[i_sort]
 
-    arrow = np.mean(np.exp(1j * x) * r * np.power(-1, float(negative)))
-
     if filtered and len(r) > 10:
         r = butter_low_pass_filter(np.r_[r[-50:], r, r[:50]])[50:-50]
 
-    axis.plot(x, r, color='k', lw=0.5, alpha=1 - c)
+    axis.plot(x, r, color=color[:-2] + '88', lw=0.5, alpha=1 - c / max_recording, zorder=2)
 
     if sun is not None:
-        axis.quiver(sun, -1, np.sin(sun), np.cos(sun), scale=.02, width=.02, color='lightgreen', alpha=0.5)
+        axis.quiver(sun, -1, np.sin(sun), np.cos(sun), scale=.02, width=.02, color='lightgreen', zorder=0)
 
-    axis.quiver(np.angle(arrow), 0, np.imag(arrow) / abs(arrow), np.real(arrow) / abs(arrow),
-                scale=5, color=f"{1 - c:.2f}")
+    if prediction is None:
+        arrow = np.mean(np.exp(1j * x) * r * np.power(-1, float(negative)))
+    else:
+        arrow = np.exp(1j * prediction)
+
+    if error is None:
+        axis.quiver(np.angle(arrow), 1, np.imag(arrow) / abs(arrow), np.real(arrow) / abs(arrow),
+                    scale=6 - 6 * c / max_recording, color=f"{1 - c / max_recording:.2f}", zorder=1)
+    else:
+        plot_circ_error_bars(prediction, c / max_recording + 1, error,
+                             color=color, edge_color=color, alpha=1 - c / max_recording, axis=axis)
 
     # ax.scatter((x - np.pi) % (2 * np.pi) - np.pi, y[:, 0], s=20, facecolor=f'C{c+2}', marker='.')
     # ax.scatter((x - np.pi) % (2 * np.pi) - np.pi, y[:, 1], s=20, facecolor=f'C{c+4}', marker='.')
     # ax.scatter((x - np.pi) % (2 * np.pi) - np.pi, y[:, 2], s=20, facecolor=f'C{c+6}', marker='.')
     # ax.scatter((x - np.pi) % (2 * np.pi) - np.pi, y[:, 3], s=20, facecolor=f'C{c+8}', marker='.')
 
-    axis.set_yticks([-1, 0, 1])
-    axis.set_yticklabels([""] * 3)
+    axis.set_yticks([-1, 0])
+    axis.set_yticklabels([""] * 2)
     axis.set_xticks([-3*np.pi/4, -np.pi/2, -np.pi/4, 0, np.pi/4, np.pi/2, 3*np.pi/4, np.pi])
     axis.set_xticklabels(["", "W", "", "N", "", "E", "", "S"])
+    axis.spines["polar"].set_visible(False)
 
     if not x_ticks:
-        axis.set_xticklabels([""] * 8)
+        axis.set_xticks([])
 
     # ax.set_ylim([-y_padding, 2 * np.pi + y_padding])
-    axis.set_ylim([y_min - y_padding, y_max + y_padding])
+    axis.set_ylim([y_min - y_padding, y_max + 1 + y_padding])
     axis.set_xlim([-np.pi, np.pi])
 
     return axis, np.angle(arrow)
+
+
+def plot_prediction_bars(data: pd.DataFrame, y, x, cmap='inferno', x_ticks=False, absolute=True, title=None, axis=None):
+
+    if absolute:
+        axis.set_theta_direction(1)
+        axis.set_theta_zero_location("E")
+
+        axis.quiver(0, -1, 2, 0, scale=.02, width=.02, color='lightgreen', zorder=0)
+
+        y_max_tick = 5
+    else:
+        axis.set_theta_direction(-1)
+        axis.set_theta_zero_location("N")
+
+        axis.quiver(0, -1, 0, 2, scale=.02, width=.02, color='lightgreen', zorder=0)
+
+        y_max_tick = 5
+
+    data_temp = data.copy()
+    data_temp = data_temp.assign(**{x: data_temp[x].apply(np.deg2rad).apply(circ_norm)})
+    if absolute:
+        data_temp = data_temp.assign(**{x: data_temp[x].apply(abs)})
+
+    data_grouped = data_temp.groupby(by=y)[x].apply(circ_quantiles).dropna()
+
+    ys = data_grouped.index.to_numpy()
+    q25s, q50s, q75s = np.stack(data_grouped.to_numpy()).T
+
+    y_min, y_max = np.maximum(np.min(ys), 0), np.max(ys)
+
+    normal = mpl.colors.Normalize(y_min - 0.5, y_max + 0.5)
+    cmap_rs = mpl.colormaps[cmap]
+
+    for yi, q25, q50, q75 in zip(ys, q25s, q50s, q75s):
+        color = cmap_rs(normal(yi))
+        y_norm = y_max_tick * (yi - y_min + 0.1) / (y_max - y_min + 0.2)
+        print(f"{title}: {yi:.0f}, MAE = {np.rad2deg(q50):.2f} ({np.rad2deg(q25):.2f}, {np.rad2deg(q75):.2f})")
+        plot_circ_error_bars(q50, y_norm, [q25, q75], color=color, axis=axis)
+
+    axis.set_yticks([-1, 0])
+    axis.set_yticklabels([""] * 2)
+    axis.set_xticks([-3*np.pi/4, -np.pi/2, -np.pi/4, 0, np.pi/4, np.pi/2, 3*np.pi/4, np.pi])
+    axis.set_xticklabels(["", "W", "", "N", "", "E", "", "S"])
+    axis.spines["polar"].set_visible(False)
+
+    if not x_ticks:
+        axis.set_xticks([])
+
+    # ax.set_ylim([-y_padding, 2 * np.pi + y_padding])
+    if absolute:
+        axis.set_ylim([-1 - (y_max_tick + 1) * 0.03, y_max_tick * 1.03 + 0.03])
+        axis.set_xlim([0, np.pi])
+    else:
+        axis.set_ylim([-1 - (y_max_tick + 1) * 0.03, y_max_tick * 1.03 + 0.03])
+        axis.set_xlim([-np.pi, np.pi])
+
+    if title is not None:
+        axis.set_title(title)
+
+
+def plot_prediction_bars2(data: pd.DataFrame, y, x, cmap='viridis', emap=None, title=None, axis=None):
+
+    axis.set_theta_direction(-1)
+    axis.set_theta_zero_location("N")
+
+    axis.quiver(0, -1, 0, 2, scale=.02, width=.02, color='lightgreen', zorder=0)
+
+    y_max_tick = 5
+
+    data_temp = data.copy()
+    data_temp = data_temp.assign(**{x: data_temp[x].apply(np.deg2rad).apply(circ_norm)})
+
+    data_grouped = data_temp.groupby(by=[y, cmap, emap])[x].apply(circ_quantiles).dropna()
+
+    ys = data_grouped.index.get_level_values(y)
+    ys = np.array([np.datetime64(yi, 'm').astype('long') for yi in ys])
+    cs = data_grouped.index.get_level_values(cmap).to_numpy()
+    es = data_grouped.index.get_level_values(emap).to_numpy()
+
+    q25s, q50s, q75s = np.stack(data_grouped.to_numpy()).T
+
+    c_min, c_max = np.min(cs), np.max(cs)
+    e_min, e_max = np.min(es), np.max(es)
+
+    c_normal = mpl.colors.Normalize(c_min - 0.5, 10 + 0.5)
+    e_normal = mpl.colors.Normalize(e_min - 0.5, 10 + 0.5)
+    cmap_rs = mpl.colormaps[cmap_dict[cmap]]
+    emap_rs = mpl.colormaps[cmap_dict[emap]]
+
+    for yi, ci, ei, q25, q50, q75 in zip(np.arange(len(ys)), cs, es, q25s, q50s, q75s):
+        color = cmap_rs(c_normal(ci))
+        edge_color = emap_rs(e_normal(ei))
+        y_norm = y_max_tick * (yi + 0.1) / (len(ys) + 0.2)
+        print(f"{title}: {yi:.0f}, MAE = {np.rad2deg(q50):.2f} ({np.rad2deg(q25):.2f}, {np.rad2deg(q75):.2f})")
+        plot_circ_error_bars(q50, y_norm, [q25, q75], color=color, edge_color=edge_color, axis=axis)
+
+    axis.set_yticks([-1, 0])
+    axis.set_yticklabels([""] * 2)
+    axis.set_xticks([-3*np.pi/4, -np.pi/2, -np.pi/4, 0, np.pi/4, np.pi/2, 3*np.pi/4, np.pi])
+    axis.set_xticklabels(["", "W", "", "N", "", "E", "", "S"])
+    axis.spines["polar"].set_visible(False)
+
+    axis.set_xticks([])
+
+    axis.set_ylim([-1 - (y_max_tick + 1) * 0.03, y_max_tick * 1.03 + 0.03])
+    axis.set_xlim([-np.pi, np.pi])
+
+    if title is not None:
+        axis.set_title(title)
 
 
 def plot_prediction_over_imu(x, y, axis=None, x_ticks=True):
@@ -814,7 +1493,7 @@ def plot_prediction_over_imu(x, y, axis=None, x_ticks=True):
     r = y[:, i_sort]
 
     x_mean = x[0]
-    r_mean = circmean(r, axis=0, nan_policy='omit')
+    r_mean = circ_mean(r, axis=0, nan_policy='omit')
 
     for r_i in [rr for rr in r] + [r_mean]:
         for i in range(r.shape[1] - 1):
@@ -864,7 +1543,7 @@ def plot_prediction_error_over_imu(x, y, axis=None, x_ticks=True):
 
     e = (r - x + np.pi) % (2 * np.pi) - np.pi
     x_mean = x[0]
-    e_mean = (circmean(e, axis=0, nan_policy='omit') + np.pi) % (2 * np.pi) - np.pi
+    e_mean = (circ_mean(e, axis=0, nan_policy='omit') + np.pi) % (2 * np.pi) - np.pi
 
     for i in range(x.shape[0]):
         axis.plot(x[i], abs(e[i]), color='k', lw=1.5, alpha=1 - i / x.shape[0])
@@ -922,19 +1601,31 @@ def plot_mse_diff_over_time(hours, d_mse, c, y_ticks=True, axis=None):
     axis.set_ylim([-60, 60])
 
 
-def compare(x, ground_truth, absolute=True, axis=None):
-    ang_distance = (x - ground_truth + np.pi) % (2 * np.pi) - np.pi
-    if absolute:
-        ang_distance = abs(ang_distance)
-    return (circmean(ang_distance, axis=axis, nan_policy='omit') + np.pi) % (2 * np.pi) - np.pi
-
-
 if __name__ == "__main__":
     import warnings
 
     warnings.simplefilter('ignore')
 
-    plot_all()
+    # metrics: mean error, mean absolute error, root mean square error, max error
+    # plot_all()
+    # plot_circ_summary(plot_type="units")
+    # plot_circ_summary(plot_type="solar-elevation")
+    # plot_circ_summary(plot_type="cloud-level")
+    # plot_circ_summary(plot_type="occlusion-level")
+    # plot_error_lines(plot_type="units", metric="mean error sd", default_ring_size=8)
+    # plot_error_lines(plot_type="solar-elevation", metric="root mean square error", default_ring_size=8)
+    # plot_error_boxes(plot_type="cloud-level", metric="mean error sd", default_ring_size=8)
+    # plot_error_boxes(plot_type="occlusion-level", metric="mean error sd", default_ring_size=8)
+    plot_error_boxes("south_africa_data", plot_type="model-comparison", metric="root mean square error", default_ring_size=8)
+    # plot_error_boxes(plot_type="location", metric="mean error sd", default_ring_size=8)
+    # plot_error_boxes(plot_type="dataset", metric="root mean square error", default_ring_size=8)
+    # plot_mae_circ(unit_type="INT-POL", metric="root mean square error sd", ring_size=8)
+    # plot_responses()
+    # plot_responses('sardinia_data')
+    # plot_responses(figure='solar-elevation')
+    # plot_responses(figure='cloud-level')
+    # plot_responses(figure='occlusion-level')
+
     # figure, axes = None, None
     # plot_summary_mae(category="tod", fig=figure, ax=axes, show=True, save=True)
     # plot_summary_mae(category="canopy", fig=figure, ax=axes, show=True, save=True)
