@@ -1,9 +1,8 @@
-from skimage.filters.thresholding import threshold_otsu, threshold_minimum, threshold_li, threshold_isodata
-from skimage.filters.thresholding import threshold_mean, threshold_yen, threshold_triangle
-from skimage import measure
 from datetime import datetime
 
 import skylight as skl
+import skimage.filters.thresholding as sft
+import skimage as ski
 import numpy as np
 import imutils
 import pytz
@@ -12,8 +11,8 @@ import os
 
 scale_percent = 15
 
-thresholds = [threshold_isodata, threshold_li, threshold_mean, threshold_minimum, threshold_otsu,
-              threshold_triangle, threshold_yen]
+thresholds = [sft.threshold_isodata, sft.threshold_li, sft.threshold_mean, sft.threshold_minimum,
+              sft.threshold_otsu, sft.threshold_triangle, sft.threshold_yen]
 
 coordinates = {
     "Sardinia": {"lon": 8.440184, "lat": 39.258648, "timezone": 'Europe/Rome'},
@@ -41,105 +40,105 @@ sky_centres = {
 }
 
 sun_centres = {  # threshold algorithm, exposure, hand-picked x, y, centre drift
-    'Friday_13-05-22_18-00-12_CEST': [threshold_minimum, 8, 87, 1733, 22.64],
-    'Friday_13-05-22_18-30-11_CEST': [threshold_minimum, 8, 100, 1900, 20.83],
-    'Friday_13-05-22_19-00-23_CEST': [threshold_minimum, 8, 107, 2093, 22.92],
-    'Friday_13-05-22_19-30-09_CEST': [threshold_minimum, 8, 107, 2240, 23.83],
-    'Friday_13-05-22_20-00-18_CEST': [threshold_minimum, 8, 100, 2307, 18.35],
-    'Friday_13-05-22_20-30-23_CEST': [threshold_minimum, 8, 107, 2333, 23.00],
-    'Friday_13-05-22_21-00-22_CEST': [threshold_minimum, 8, 40, 2400, 20.15],
-    'Monday_16-05-22_11-19-06_CEST': [threshold_yen, 2, 2293, 1073, -3.59],
-    'Saturday_14-05-22_06-32-27_CEST': [threshold_minimum, 8, 3147, 2280, -3.00],
-    'Saturday_14-05-22_07-00-12_CEST': [threshold_minimum, 8, 3160, 1927, 7.00],
-    'Saturday_14-05-22_07-30-13_CEST': [threshold_otsu, 8, 3160, 1787, 11.95],
-    'Saturday_14-05-22_08-00-13_CEST': [threshold_otsu, 8, 3160, 1620, 9.70],
-    'Saturday_14-05-22_08-30-18_CEST': [threshold_minimum, 8, 3120, 1467, 7.59],
-    'Saturday_14-05-22_09-00-11_CEST': [threshold_minimum, 8, 3060, 1293, 10.26],
-    'Sunday_15-05-22_17-05-48_CEST': [threshold_yen, 2, 333, 1360, 5.00],
-    'Sunday_15-05-22_17-41-05_CEST': [threshold_minimum, 8, 227, 1487, 5.00],
-    'Thursday_12-05-22_09-08-12_CEST': [threshold_minimum, 8, 3067, 1633, -18.00],
-    'Thursday_12-05-22_10-00-48_CEST': [threshold_minimum, 8, 2813, 1300, -3.69],
-    'Thursday_12-05-22_11-01-03_CEST': [threshold_minimum, 8, 2433, 980, 5.78],
-    'Thursday_12-05-22_12-03-06_CEST': [threshold_minimum, 8, 1993, 920, 10.47],
-    'Thursday_12-05-22_13-00-12_CEST': [threshold_minimum, 8, 1647, 887, 20.55],
-    'Thursday_12-05-22_14-09-27_CEST': [threshold_minimum, 8, 1260, 927, 13.23],
-    'Thursday_12-05-22_15-09-27_CEST': [threshold_otsu, 8, 887, 1053, 18.27],
-    'Thursday_12-05-22_16-01-54_CEST': [threshold_minimum, 8, 600, 1167, 13.00],
-    'Thursday_12-05-22_17-01-44_CEST': [threshold_minimum, 8, 273, 1407, 17.40],
-    'Thursday_12-05-22_18-00-11_CEST': [threshold_minimum, 8, 87, 1547, 9.25],
-    'Thursday_12-05-22_19-00-20_CEST': [threshold_minimum, 8, 47, 1660, 4.00],
-    'Thursday_12-05-22_20-02-32_CEST': [threshold_minimum, 8, 67, 2253, 19.63],
-    'Thursday_12-05-22_21-03-00_CEST': [threshold_triangle, 2, 53, 2427, 20.08],
-    'Thursday_19-05-22_11-30-21_CEST': [threshold_otsu, 8, 2200, 973, 6.54],
-    'Thursday_19-05-22_12-00-16_CEST': [threshold_minimum, 8, 2060, 980, -1.00],
-    'Thursday_19-05-22_12-30-11_CEST': [threshold_minimum, 8, 1847, 940, 10.88],
-    'Thursday_19-05-22_13-00-10_CEST': [threshold_minimum, 8, 1673, 933, 9.43],
-    'Thursday_19-05-22_13-30-25_CEST': [threshold_minimum, 8, 1540, 933, 4.59],
-    'Thursday_19-05-22_14-00-15_CEST': [threshold_minimum, 8, 1347, 960, 9.84],
-    'Thursday_19-05-22_14-30-14_CEST': [threshold_minimum, 8, 1173, 987, 11.81],
-    'Thursday_19-05-22_15-00-14_CEST': [threshold_minimum, 8, 987, 1040, 11.93],
-    'Thursday_19-05-22_16-33-48_CEST': [threshold_triangle, 2, 533, 1213, 7.00],
-    'Thursday_19-05-22_16-54-50_CEST': [threshold_minimum, 8, 433, 1113, -3.76],
-    'Thursday_19-05-22_17-20-24_CEST': [threshold_minimum, 8, 260, 1473, 12.00],
+    'Friday_13-05-22_18-00-12_CEST': [sft.threshold_minimum, 8, 87, 1733, 22.64],
+    'Friday_13-05-22_18-30-11_CEST': [sft.threshold_minimum, 8, 100, 1900, 20.83],
+    'Friday_13-05-22_19-00-23_CEST': [sft.threshold_minimum, 8, 107, 2093, 22.92],
+    'Friday_13-05-22_19-30-09_CEST': [sft.threshold_minimum, 8, 107, 2240, 23.83],
+    'Friday_13-05-22_20-00-18_CEST': [sft.threshold_minimum, 8, 100, 2307, 18.35],
+    'Friday_13-05-22_20-30-23_CEST': [sft.threshold_minimum, 8, 107, 2333, 23.00],
+    'Friday_13-05-22_21-00-22_CEST': [sft.threshold_minimum, 8, 40, 2400, 20.15],
+    'Monday_16-05-22_11-19-06_CEST': [sft.threshold_yen, 2, 2293, 1073, -3.59],
+    'Saturday_14-05-22_06-32-27_CEST': [sft.threshold_minimum, 8, 3147, 2280, -3.00],
+    'Saturday_14-05-22_07-00-12_CEST': [sft.threshold_minimum, 8, 3160, 1927, 7.00],
+    'Saturday_14-05-22_07-30-13_CEST': [sft.threshold_otsu, 8, 3160, 1787, 11.95],
+    'Saturday_14-05-22_08-00-13_CEST': [sft.threshold_otsu, 8, 3160, 1620, 9.70],
+    'Saturday_14-05-22_08-30-18_CEST': [sft.threshold_minimum, 8, 3120, 1467, 7.59],
+    'Saturday_14-05-22_09-00-11_CEST': [sft.threshold_minimum, 8, 3060, 1293, 10.26],
+    'Sunday_15-05-22_17-05-48_CEST': [sft.threshold_yen, 2, 333, 1360, 5.00],
+    'Sunday_15-05-22_17-41-05_CEST': [sft.threshold_minimum, 8, 227, 1487, 5.00],
+    'Thursday_12-05-22_09-08-12_CEST': [sft.threshold_minimum, 8, 3067, 1633, -18.00],
+    'Thursday_12-05-22_10-00-48_CEST': [sft.threshold_minimum, 8, 2813, 1300, -3.69],
+    'Thursday_12-05-22_11-01-03_CEST': [sft.threshold_minimum, 8, 2433, 980, 5.78],
+    'Thursday_12-05-22_12-03-06_CEST': [sft.threshold_minimum, 8, 1993, 920, 10.47],
+    'Thursday_12-05-22_13-00-12_CEST': [sft.threshold_minimum, 8, 1647, 887, 20.55],
+    'Thursday_12-05-22_14-09-27_CEST': [sft.threshold_minimum, 8, 1260, 927, 13.23],
+    'Thursday_12-05-22_15-09-27_CEST': [sft.threshold_otsu, 8, 887, 1053, 18.27],
+    'Thursday_12-05-22_16-01-54_CEST': [sft.threshold_minimum, 8, 600, 1167, 13.00],
+    'Thursday_12-05-22_17-01-44_CEST': [sft.threshold_minimum, 8, 273, 1407, 17.40],
+    'Thursday_12-05-22_18-00-11_CEST': [sft.threshold_minimum, 8, 87, 1547, 9.25],
+    'Thursday_12-05-22_19-00-20_CEST': [sft.threshold_minimum, 8, 47, 1660, 4.00],
+    'Thursday_12-05-22_20-02-32_CEST': [sft.threshold_minimum, 8, 67, 2253, 19.63],
+    'Thursday_12-05-22_21-03-00_CEST': [sft.threshold_triangle, 2, 53, 2427, 20.08],
+    'Thursday_19-05-22_11-30-21_CEST': [sft.threshold_otsu, 8, 2200, 973, 6.54],
+    'Thursday_19-05-22_12-00-16_CEST': [sft.threshold_minimum, 8, 2060, 980, -1.00],
+    'Thursday_19-05-22_12-30-11_CEST': [sft.threshold_minimum, 8, 1847, 940, 10.88],
+    'Thursday_19-05-22_13-00-10_CEST': [sft.threshold_minimum, 8, 1673, 933, 9.43],
+    'Thursday_19-05-22_13-30-25_CEST': [sft.threshold_minimum, 8, 1540, 933, 4.59],
+    'Thursday_19-05-22_14-00-15_CEST': [sft.threshold_minimum, 8, 1347, 960, 9.84],
+    'Thursday_19-05-22_14-30-14_CEST': [sft.threshold_minimum, 8, 1173, 987, 11.81],
+    'Thursday_19-05-22_15-00-14_CEST': [sft.threshold_minimum, 8, 987, 1040, 11.93],
+    'Thursday_19-05-22_16-33-48_CEST': [sft.threshold_triangle, 2, 533, 1213, 7.00],
+    'Thursday_19-05-22_16-54-50_CEST': [sft.threshold_minimum, 8, 433, 1113, -3.76],
+    'Thursday_19-05-22_17-20-24_CEST': [sft.threshold_minimum, 8, 260, 1473, 12.00],
 
-    'Friday_11-11-22_14-25-46_SAST': [threshold_yen, 8, 1200, 1153, 0.04],
-    'Friday_11-11-22_16-01-02_SAST': [threshold_triangle, 2, 660, 1533, 20.86],
-    'Friday_18-11-22_09-22-15_SAST': [threshold_minimum, 8, 2180, 1040, 35.10],
-    'Friday_18-11-22_09-34-45_SAST': [threshold_minimum, 8, 2153, 1113, 30.34],
-    'Monday_14-11-22_07-35-27_SAST': [threshold_minimum, 8, 2627, 920, 26.39],
-    'Monday_14-11-22_08-31-21_SAST': [threshold_minimum, 8, 2460, 1113, 21.10],
-    'Monday_14-11-22_09-31-28_SAST': [threshold_minimum, 8, 2100, 1287, 19.52],
-    'Monday_14-11-22_10-33-11_SAST': [threshold_yen, 2, 2020, 1320, 25.82],
-    'Monday_14-11-22_11-30-27_SAST': [threshold_minimum, 2, 1793, 1400, 0.18],
-    'Monday_14-11-22_12-32-42_SAST': [threshold_li, 8, 1573, 1460, 13.34],
-    'Monday_14-11-22_13-31-22_SAST': [threshold_minimum, 2, 1333, 1513, 36.02],
-    'Monday_14-11-22_14-30-10_SAST': [threshold_minimum, 2, 1120, 1473, 27.67],
-    'Monday_14-11-22_15-32-43_SAST': [threshold_triangle, 2, 827, 1567, 42.59],
-    'Monday_14-11-22_16-31-03_SAST': [threshold_minimum, 8, 680, 1487, 47.41],
-    'Monday_14-11-22_17-30-59_SAST': [threshold_minimum, 8, 527, 1267, 30.00],
-    'Monday_14-11-22_18-30-49_SAST': [threshold_minimum, 8, 467, 973, 26.00],
-    'Monday_14-11-22_19-30-02_SAST': [threshold_minimum, 2, 353, 740, 30.00],
-    'Monday_21-11-22_05-31-37_SAST': [threshold_minimum, 8, 2927, 833, 8.00],
-    'Monday_21-11-22_06-00-11_SAST': [threshold_minimum, 8, 2933, 813, 6.59],
-    'Monday_21-11-22_06-31-27_SAST': [threshold_minimum, 8, 2893, 807, 20.00],
-    'Monday_21-11-22_07-01-53_SAST': [threshold_minimum, 8, 2833, 973, 10.00],
-    'Monday_21-11-22_08-01-37_SAST': [threshold_minimum, 8, 2720, 1047, 30.56],
-    'Monday_21-11-22_14-26-58_SAST': [threshold_minimum, 8, 1047, 1440, 30.00],
-    'Monday_28-11-22_08-29-06_SAST': [threshold_isodata, 8, 2540, 993, 11.26],
-    'Monday_28-11-22_08-48-02_SAST': [threshold_isodata, 8, 2433, 1207, 20.00],
-    'Monday_28-11-22_13-36-03_SAST': [threshold_isodata, 8, 1307, 1420, 20.00],
-    'Saturday_12-11-22_10-20-48_SAST': [threshold_minimum, 8, 2533, 1320, 1.12],
-    'Saturday_12-11-22_11-18-20_SAST': [threshold_minimum, 8, 2240, 1407, 5.95],
-    'Saturday_12-11-22_13-35-07_SAST': [threshold_minimum, 8, 1407, 1233, -22.00],
-    'Saturday_12-11-22_14-31-01_SAST': [threshold_minimum, 8, 960, 1280, 0.00],
-    'Saturday_12-11-22_15-23-06_SAST': [threshold_minimum, 8, 740, 1140, 1.00],
-    'Saturday_12-11-22_16-16-00_SAST': [threshold_minimum, 8, 500, 940, -5.32],
-    'Saturday_26-11-22_10-17-03_SAST': [threshold_minimum, 8, 2120, 1160, 14.00],
-    'Saturday_26-11-22_14-03-34_SAST': [threshold_triangle, 2, 1120, 1427, 15.00],
-    'Saturday_26-11-22_16-02-49_SAST': [threshold_minimum, 8, 687, 1320, 26.61],
-    'Sunday_13-11-22_08-01-27_SAST': [threshold_minimum, 8, 3160, 1040, 2.35],
-    'Sunday_13-11-22_09-00-04_SAST': [threshold_minimum, 8, 3000, 1233, -4.00],
-    'Sunday_13-11-22_10-00-06_SAST': [threshold_minimum, 8, 2053, 333, 82.00],  # *
-    'Sunday_13-11-22_11-00-09_SAST': [threshold_otsu, 2, 2313, 1400, -7.24],
-    'Sunday_13-11-22_12-00-05_SAST': [threshold_otsu, 8, 1827, 1327, -7.80],
-    'Sunday_13-11-22_13-00-06_SAST': [threshold_minimum, 8, 1653, 1293, -9.55],
-    'Sunday_13-11-22_14-00-04_SAST': [threshold_otsu, 8, 1400, 1293, 0.76],
-    'Sunday_13-11-22_15-00-05_SAST': [threshold_otsu, 8, 933, 1253, 3.23],
-    'Sunday_13-11-22_16-00-03_SAST': [threshold_minimum, 8, 627, 1160, 2.52],
-    'Sunday_13-11-22_17-00-05_SAST': [threshold_minimum, 8, 347, 333, -20.10],
-    'Sunday_20-11-22_14-28-16_SAST': [threshold_minimum, 8, 1047, 1440, 23.95],
-    'Sunday_20-11-22_14-36-46_SAST': [threshold_minimum, 8, 1027, 1447, 26.00],
-    'Sunday_20-11-22_14-45-36_SAST': [threshold_minimum, 8, 1040, 1627, 45.15],
-    'Sunday_27-11-22_15-14-02_SAST': [threshold_yen, 2, 807, 1553, 40.00],
-    'Sunday_27-11-22_15-30-38_SAST': [threshold_minimum, 8, 680, 1340, 25.00],
-    'Sunday_27-11-22_15-46-11_SAST': [threshold_minimum, 8, 680, 1360, 32.24],
-    'Sunday_27-11-22_16-02-54_SAST': [threshold_minimum, 8, 613, 1300, 33.02],
-    'Tuesday_22-11-22_10-23-15_SAST': [threshold_minimum, 8, 2513, 1227, 43.79],
-    'Tuesday_22-11-22_13-07-52_SAST': [threshold_minimum, 8, 1413, 1413, 24.89],
-    'Tuesday_22-11-22_14-16-59_SAST': [threshold_minimum, 8, 1113, 1407, 29.29],
-    'Wednesday_23-11-22_11-00-00_SAST': [threshold_minimum, 8, 2153, 1253, 20.00],
-    'Wednesday_23-11-22_12-01-04_SAST': [threshold_minimum, 8, 1673, 1347, 20.00],
-    'Wednesday_23-11-22_13-01-47_SAST': [threshold_minimum, 8, 1380, 1360, 20.00]
+    'Friday_11-11-22_14-25-46_SAST': [sft.threshold_yen, 8, 1200, 1153, 0.04],
+    'Friday_11-11-22_16-01-02_SAST': [sft.threshold_triangle, 2, 660, 1533, 20.86],
+    'Friday_18-11-22_09-22-15_SAST': [sft.threshold_minimum, 8, 2180, 1040, 35.10],
+    'Friday_18-11-22_09-34-45_SAST': [sft.threshold_minimum, 8, 2153, 1113, 30.34],
+    'Monday_14-11-22_07-35-27_SAST': [sft.threshold_minimum, 8, 2627, 920, 26.39],
+    'Monday_14-11-22_08-31-21_SAST': [sft.threshold_minimum, 8, 2460, 1113, 21.10],
+    'Monday_14-11-22_09-31-28_SAST': [sft.threshold_minimum, 8, 2100, 1287, 19.52],
+    'Monday_14-11-22_10-33-11_SAST': [sft.threshold_yen, 2, 2020, 1320, 25.82],
+    'Monday_14-11-22_11-30-27_SAST': [sft.threshold_minimum, 2, 1793, 1400, 0.18],
+    'Monday_14-11-22_12-32-42_SAST': [sft.threshold_li, 8, 1573, 1460, 13.34],
+    'Monday_14-11-22_13-31-22_SAST': [sft.threshold_minimum, 2, 1333, 1513, 36.02],
+    'Monday_14-11-22_14-30-10_SAST': [sft.threshold_minimum, 2, 1120, 1473, 27.67],
+    'Monday_14-11-22_15-32-43_SAST': [sft.threshold_triangle, 2, 827, 1567, 42.59],
+    'Monday_14-11-22_16-31-03_SAST': [sft.threshold_minimum, 8, 680, 1487, 47.41],
+    'Monday_14-11-22_17-30-59_SAST': [sft.threshold_minimum, 8, 527, 1267, 30.00],
+    'Monday_14-11-22_18-30-49_SAST': [sft.threshold_minimum, 8, 467, 973, 26.00],
+    'Monday_14-11-22_19-30-02_SAST': [sft.threshold_minimum, 2, 353, 740, 30.00],
+    'Monday_21-11-22_05-31-37_SAST': [sft.threshold_minimum, 8, 2927, 833, 8.00],
+    'Monday_21-11-22_06-00-11_SAST': [sft.threshold_minimum, 8, 2933, 813, 6.59],
+    'Monday_21-11-22_06-31-27_SAST': [sft.threshold_minimum, 8, 2893, 807, 20.00],
+    'Monday_21-11-22_07-01-53_SAST': [sft.threshold_minimum, 8, 2833, 973, 10.00],
+    'Monday_21-11-22_08-01-37_SAST': [sft.threshold_minimum, 8, 2720, 1047, 30.56],
+    'Monday_21-11-22_14-26-58_SAST': [sft.threshold_minimum, 8, 1047, 1440, 30.00],
+    'Monday_28-11-22_08-29-06_SAST': [sft.threshold_isodata, 8, 2540, 993, 11.26],
+    'Monday_28-11-22_08-48-02_SAST': [sft.threshold_isodata, 8, 2433, 1207, 20.00],
+    'Monday_28-11-22_13-36-03_SAST': [sft.threshold_isodata, 8, 1307, 1420, 20.00],
+    'Saturday_12-11-22_10-20-48_SAST': [sft.threshold_minimum, 8, 2533, 1320, 1.12],
+    'Saturday_12-11-22_11-18-20_SAST': [sft.threshold_minimum, 8, 2240, 1407, 5.95],
+    'Saturday_12-11-22_13-35-07_SAST': [sft.threshold_minimum, 8, 1407, 1233, -22.00],
+    'Saturday_12-11-22_14-31-01_SAST': [sft.threshold_minimum, 8, 960, 1280, 0.00],
+    'Saturday_12-11-22_15-23-06_SAST': [sft.threshold_minimum, 8, 740, 1140, 1.00],
+    'Saturday_12-11-22_16-16-00_SAST': [sft.threshold_minimum, 8, 500, 940, -5.32],
+    'Saturday_26-11-22_10-17-03_SAST': [sft.threshold_minimum, 8, 2120, 1160, 14.00],
+    'Saturday_26-11-22_14-03-34_SAST': [sft.threshold_triangle, 2, 1120, 1427, 15.00],
+    'Saturday_26-11-22_16-02-49_SAST': [sft.threshold_minimum, 8, 687, 1320, 26.61],
+    'Sunday_13-11-22_08-01-27_SAST': [sft.threshold_minimum, 8, 3160, 1040, 2.35],
+    'Sunday_13-11-22_09-00-04_SAST': [sft.threshold_minimum, 8, 3000, 1233, -4.00],
+    'Sunday_13-11-22_10-00-06_SAST': [sft.threshold_minimum, 8, 2053, 333, 82.00],  # *
+    'Sunday_13-11-22_11-00-09_SAST': [sft.threshold_otsu, 2, 2313, 1400, -7.24],
+    'Sunday_13-11-22_12-00-05_SAST': [sft.threshold_otsu, 8, 1827, 1327, -7.80],
+    'Sunday_13-11-22_13-00-06_SAST': [sft.threshold_minimum, 8, 1653, 1293, -9.55],
+    'Sunday_13-11-22_14-00-04_SAST': [sft.threshold_otsu, 8, 1400, 1293, 0.76],
+    'Sunday_13-11-22_15-00-05_SAST': [sft.threshold_otsu, 8, 933, 1253, 3.23],
+    'Sunday_13-11-22_16-00-03_SAST': [sft.threshold_minimum, 8, 627, 1160, 2.52],
+    'Sunday_13-11-22_17-00-05_SAST': [sft.threshold_minimum, 8, 347, 333, -20.10],
+    'Sunday_20-11-22_14-28-16_SAST': [sft.threshold_minimum, 8, 1047, 1440, 23.95],
+    'Sunday_20-11-22_14-36-46_SAST': [sft.threshold_minimum, 8, 1027, 1447, 26.00],
+    'Sunday_20-11-22_14-45-36_SAST': [sft.threshold_minimum, 8, 1040, 1627, 45.15],
+    'Sunday_27-11-22_15-14-02_SAST': [sft.threshold_yen, 2, 807, 1553, 40.00],
+    'Sunday_27-11-22_15-30-38_SAST': [sft.threshold_minimum, 8, 680, 1340, 25.00],
+    'Sunday_27-11-22_15-46-11_SAST': [sft.threshold_minimum, 8, 680, 1360, 32.24],
+    'Sunday_27-11-22_16-02-54_SAST': [sft.threshold_minimum, 8, 613, 1300, 33.02],
+    'Tuesday_22-11-22_10-23-15_SAST': [sft.threshold_minimum, 8, 2513, 1227, 43.79],
+    'Tuesday_22-11-22_13-07-52_SAST': [sft.threshold_minimum, 8, 1413, 1413, 24.89],
+    'Tuesday_22-11-22_14-16-59_SAST': [sft.threshold_minimum, 8, 1113, 1407, 29.29],
+    'Wednesday_23-11-22_11-00-00_SAST': [sft.threshold_minimum, 8, 2153, 1253, 20.00],
+    'Wednesday_23-11-22_12-01-04_SAST': [sft.threshold_minimum, 8, 1673, 1347, 20.00],
+    'Wednesday_23-11-22_13-01-47_SAST': [sft.threshold_minimum, 8, 1380, 1360, 20.00]
 }
 
 continue_exploring = False
@@ -174,7 +173,7 @@ def extract_sun_vector(image, approx_xy=None, time=None, fig_name=None, show=Fal
         "exposure": []
     }
 
-    threshold = threshold_otsu
+    threshold = sft.threshold_otsu
     exposure = 8
     img_temp = img_8
 
@@ -448,7 +447,7 @@ def connected_component_analysis(image, large_threshold=300):
     Perform connected component analysis on the image,
     then initialise a mask to store only the "large" components.
     """
-    labels = measure.label(image, background=0, connectivity=2)
+    labels = ski.measure.label(image, background=0, connectivity=2)
     mask = np.zeros(image.shape, dtype="uint8")
     print(len(labels))
 

@@ -1,203 +1,125 @@
-from scipy.optimize import lsq_linear
+import circstats as cs
 
+import scipy.optimize as so
 import numpy as np
 
 UNIT_ANGLES = np.deg2rad([45, 135, 90, 0], dtype='float64')  # -45, +45, 0, 90
 POL_PREFS = np.deg2rad([0, 90, 180, 270, 45, 135, 225, 315], dtype='float64')
 
-A: np.ndarray = None
-A_inv: np.ndarray = A
 
-
-def decode_sky_compass(po, n_sol=8, pol_prefs=POL_PREFS, polarisation=True, intensity=False):
-    """
-    Sky compass decoding routine from Gkanias et al. (2019). This has been
-    implemeneted from scratch using the equations presented as a demonstration
-    that everything can be programmed from scratch without calling out to
-    external libraries or FFT implementations.
-
-    :param po: Pol-op unit responses
-    :param n_sol: The number of SOL neurons in use
-    :param pol_prefs: The preferred angles of each POL neuron. This is determined
-                      by the hardware configuration at the time the recording was
-                      taken.
-    :returns: A list of azimuthal angles with a list of associated confidence
-              in each.
-    """
-    # po structure
-    # po[p] Unit p
-    # po[p][t] readings for unit p at time t
-    # po[p][t][d] reading for diode d of unit p at time t
-    units, diodes = po.shape
-
-    sol_prefs = np.linspace(0, 2 * np.pi, n_sol, endpoint=False)
-
-    # ensure that the response is in [0, 1]
-    # the highest observed value was 32768 (Thursday 17:20)
-    response = np.clip(abs(po) / 33000., 0., 1.)
-    if not polarisation and not bool(intensity):
-        angle, sigma = pol2eig(response, pol_prefs)
-    elif polarisation and not bool(intensity):
-        angle, sigma = pol2sol(response, sol_prefs, pol_prefs, unit_transform=unit2pol)
-    elif not polarisation and bool(intensity):
-        angle, sigma = pol2sol(response, sol_prefs + np.pi, pol_prefs, unit_transform=unit2int)
-    else:
-        a_pol, c_pol = pol2sol(response, sol_prefs, pol_prefs, unit_transform=unit2pol)
-        a_int, c_int = pol2sol(response, sol_prefs + np.pi, pol_prefs, unit_transform=unit2int)
-        c_int /= len(pol_prefs)
-        s_pol = 1. / (c_pol + np.finfo(float).eps) ** 2
-        s_int = 1. / (float(intensity) * c_int + np.finfo(float).eps) ** 2
-
-        angle = (s_pol * a_int + s_int * a_pol) / (s_pol + s_int)
-        sigma = (s_pol * s_int) / (s_pol + s_int)
-
-    return angle, sigma
-
-
-def pol2sol(po, sol_prefs, pol_prefs, unit_transform):
-    units, diodes = po.shape
+def pol2sol(pol, sol_prefs, pol_prefs):
     n_sol = len(sol_prefs)
     n_pol = len(pol_prefs)
 
-    # Get photodiode responses for each unit
-    r_pol = np.array([unit_transform(po[x]) for x in range(units)])
+    sol = np.sum((n_sol / n_pol) * np.cos(pol_prefs[:, None] - sol_prefs[None, :]) * pol[:, None], axis=0)
 
-    # Init for sum
-    r_sol = np.zeros(n_sol)
-    R = 0
-    for z in range(n_sol):
-        for j in range(n_pol):  # Compute SOL responses (Eq. (2))
-            aj = pol_prefs[j] - np.pi / 2
-            r_sol[z] += (n_sol / n_pol) * np.sin(aj - sol_prefs[z]) * r_pol[j]
+    return sol
 
-        # Accumulate R (Eq. (3))
-        R += r_sol[z] * np.exp(-1j * 2 * np.pi * (z - 1) / n_sol)
 
-    a = np.real(R)
-    b = np.imag(R)
+def sol2angle(sol):
+    z = np.sum(sol * np.exp(1j * np.linspace(0, 2 * np.pi, len(sol), endpoint=False)))
 
-    # Compute argument and magnitude of complex conjugate of R (Eq. (4))
-    angle = np.arctan2(-b, a)
-    confidence = np.sqrt(a ** 2 + b ** 2)
+    angle = np.angle(z)
+    confidence = np.abs(z)
 
     return angle, confidence
 
 
-def unit2pol(unit_response, log=True):
-    r_h, r_v = unit2vh(unit_response, log)
-    # return r_h - r_v
-    return (r_h - r_v) / (r_h + r_v + np.finfo(float).eps)
+def four_zeros(po, pol_prefs, x0=None, verbose=False):
+    z0 = 1 / len(pol_prefs) * np.sum(po * np.exp(0j * pol_prefs))
+    z1 = 2 / len(pol_prefs) * np.sum(po * np.exp(1j * pol_prefs))
+    z2 = 2 / len(pol_prefs) * np.sum(po * np.exp(2j * pol_prefs))
+
+    r0, r1, r2 = np.abs([z0, z1, z2])
+    a0, a1, a2 = np.angle([z0, z1, z2]) % (2 * np.pi)
+
+    if verbose:
+        print(f"z0: {r0:.2f} exp(i {np.rad2deg(a0):.2f}), "
+              f"z1: {r1:.2f} exp(i {np.rad2deg(a1):.2f}), "
+              f"z2: {r2:.2f} exp(i {np.rad2deg(a2):.2f})")
+
+    if x0 is None:
+        x0 = np.sort((a2 / 2 + np.linspace(0, 2 * np.pi, 4, endpoint=False) + np.pi/4) % (2 * np.pi))
+
+    f = lambda a: r1 * np.cos(a1 - a) + r2 * np.cos(a2 - 2 * a)
+    df = lambda a: r1 * np.sin(a1 - a) + 2 * r2 * np.sin(a2 - 2 * a)
+
+    # solve the equation to find the 4 zeros
+    sol = so.newton(f, x0, fprime=df)
+
+    # sort the solution
+    y = np.sort(np.array(sol) % (2 * np.pi))
+
+    # # 4 zeros algorithm
+    # s = np.mean(y)
+    # i, m = 0, 0
+    # if not np.isclose(y[1] - y[0], y[3] - y[2]):
+    #     i = 1
+    #     m = 1
+    # if y[i % 4] - y[(i + 3) % 4] < y[(i + 2) % 4] - y[(i + 1) % 4]:
+    #     m += 2
+    #
+    # angle = (s + m * np.pi/2) % (2 * np.pi)
+
+    # our alternative
+    dy = abs(cs.circ_norm(np.diff(y, append=y[0] + 2 * np.pi)))
+    i = np.argmin(dy)
+    angle = cs.circ_norm(y[i] + 0.5 * dy[i])
+
+    res = [angle]
+
+    if verbose:
+        print(f"predicted solar azimuth: {np.rad2deg(angle):.2f}, "
+              f"zeros: ", *[f"{np.rad2deg(yi):.2f}" for yi in y])
+        res += [y, z0, z1, z2]
+
+    return tuple(res)
 
 
-def unit2int(unit_response, log=True):
-    r_h, r_v = unit2vh(unit_response, log)
-    r = (r_h + r_v) / 2
-    # r = np.sqrt(r_h**2 + r_v**2)
-    return r
+def eigenvectors(s000, s045, s090, s135, pol_prefs, verbose=False):
+    phi_1, phi_2, phi_3, phi_4 = np.deg2rad([0, 45, 90, 135])  # in local frame
 
+    # Equation (4), Zhao et al. (2016)
+    t1 = s000 / s090
+    t2 = s045 / s135
 
-def unit2vh(unit_response, log=True):
-    # default: -45, +45, 0, 90
-    s = act(abs(unit_response) + np.finfo(float).eps, log)
-    s_v = np.squeeze(s[np.isclose(UNIT_ANGLES, 0)])
-    s_h = np.squeeze(s[np.isclose(UNIT_ANGLES, np.pi/2)])
+    # Equations (5)
+    phi = cs.circ_norm(0.5 * np.arctan2(
+        (t2 - 1) * np.cos(2 * phi_1) + (1 - t1) * np.cos(2 * phi_2) +
+        (t1 - t1 * t2) * np.cos(2 * phi_3) + (t1 * t2 - t2) * np.cos(2 * phi_4),
+        (1 - t2) * np.sin(2 * phi_1) + (t1 - 1) * np.sin(2 * phi_2) +
+        (t1 * t2 - t1) * np.sin(2 * phi_3) + (t2 - t1 * t2) * np.sin(2 * phi_4)
+    ))
+    d = (t1 - 1) / (np.cos(2 * phi - 2 * phi_1) - t1 * np.cos(2 * phi - 2 * phi_3))
 
-    return s_h, s_v
+    # Sturzl (2017)
+    azi = pol_prefs  # the azimuth of the device
+    ele = np.full_like(pol_prefs, np.pi/4)  # the elevation of the device
 
+    # alpha = phi - azi  # AOP in global frame (original, from paper)
+    # e_par = np.array([-np.cos(azi) * np.sin(ele), -np.sin(azi) * np.sin(ele), np.cos(ele)])  # parallel to e-vector
+    # e_per = np.array([-np.sin(azi), np.cos(azi), np.zeros_like(azi)])  # perpendicular to e-vector
+    # p = -np.cos(alpha) * e_par + np.sin(alpha) * e_per
 
-def act(s, log=True):
-    """
-    Photoreceptor activation function. Gkanias et al. (2019) uses square
-    root activation, however log activation appears to generate a slightly
-    more stable angular representation.
+    alpha = azi + phi  # AOP in global frame (my change)
+    # p = np.array([np.sin(azi), np.cos(azi)])  # this points outwards (towards the facing direction)
+    # p = np.array([np.cos(-azi), np.sin(-azi)])  # this points 90 deg from facing direction
+    p = -np.array([np.sin(alpha), np.cos(alpha)])  # this points 90 deg from facing direction (inwards)
 
-    :param s: The input to the photoreceptor.
-    :param log: Set True to use Log activation rather than square root.
-    :return: The firing rate of the photoreceptor given input s.
-    """
-    if not log:
-        return np.sqrt(s)
+    # # compute eigenvectors
+    # eig = p.dot(p.T)
+    # eig[~np.isfinite(eig)] = 0.  # ensure that there are not infinites or NaNs
+    # w, v = np.linalg.eig(eig)
+    # iv = np.argmax(w)
+    # vi = v[iv]
 
-    return np.log(s)
+    # compute mean vector (equivalent)
+    vi = np.mean(d * p, axis=1)
 
+    z_sun = vi[1] + 1j * vi[0]
+    res = [np.angle(z_sun)]
 
-def pol2eig(po, pol_prefs):
+    if verbose:
+        res += [phi, d, d * p]
 
-    pol_prefs = pol_prefs[:-1]
-    units, diodes = po.shape
-    units -= 1
-
-    # Get photodiode responses for each unit
-    phi, d = np.array([unit2eig(po[x], pol_prefs[x]) for x in range(units)]).T
-
-    pe = np.array([np.cos(phi), np.sin(phi), np.zeros_like(phi)])
-
-    alpha = pol_prefs
-    gamma = np.full_like(alpha, np.deg2rad(45))
-
-    e = np.zeros_like(pe)
-    for i, a, g in zip(range(len(alpha)), alpha, gamma):
-        c1 = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]], dtype='float32')
-        c2 = np.array([[np.cos(g), 0, np.sin(g)], [0, 1, 0], [-np.sin(g), 0, np.cos(g)]], dtype='float32')
-        c = np.dot(c1, c2)
-
-        e[:, i] = c.dot(pe[:, i])
-
-    eig = e.dot(e.T)
-
-    eigenvalues, eigenvectors = np.linalg.eigh(eig)
-
-    i_star = np.argmin(eigenvalues)
-    s_1, s_2, s_3 = eigenvectors[i_star]
-
-    # print(eigenvalues)
-    # print(eigenvectors)
-
-    # import sys
-    # sys.exit()
-
-    # Compute argument and magnitude of complex conjugate of R (Eq. (4))
-    angle = np.arctan2(s_2, s_1)
-    confidence = 1.0
-
-    return angle, confidence
-
-
-def unit2eig(unit_response, pref_angle=0):
-    # q1, q2, q3 = np.linalg.inv(a.T.dot(a)).dot(a.T).dot(unit_response)
-    q1, q2, q3 = update_globals(unit_response)
-    # q1 = i_0 - i_90
-    # q2 = i_45 - i_135
-    # q3 = (i_0 + i_45 + i_90 + i_135) / 2
-
-    phi = 0.5 * np.arctan2(q2, q1) - pref_angle
-    d = np.sqrt(np.square(q1) + np.square(q2)) / q3
-
-    return phi, d
-
-
-def update_globals(f=None):
-    global A, A_inv
-
-    A = np.round(np.array([np.cos(2 * UNIT_ANGLES), np.sin(2 * UNIT_ANGLES), np.ones_like(UNIT_ANGLES)]).T, decimals=2)
-
-    if f is None:
-        # A_inv = np.linalg.inv(A.T.dot(A)).dot(A.T)
-        A_inv = np.linalg.pinv(A)
-        return None
-    else:
-        res = lsq_linear(A, f)
-        if res.x is not None:
-            return res.x
-        else:
-            A_inv = np.linalg.pinv(A)
-            return np.dot(A_inv, f)
-
-
-update_globals()
-
-
-if __name__ == "__main__":
-    print(np.rad2deg(UNIT_ANGLES))
-    phi_i, d_i = unit2eig([0.25, 0.5, 1, 0])
-    print(f"phi = {np.rad2deg(phi_i):.2f}, d = {d_i:.2f}")
+    return tuple(res)
