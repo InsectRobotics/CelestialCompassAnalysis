@@ -1,4 +1,4 @@
-# Celestial Compass Analysis ![GitHub top language](http://img.shields.io/github/languages/top/InsectRobotics/CelestialCompassAnalysis) ![GitHub license](http://img.shields.io/github/license/InsectRobotics/CelestialCompassAnalysis) ![GitHub last commit](http://img.shields.io/github/last-commit/InsectRobotics/CelestialCompassAnalysis)
+# Celestial Compass Analysis ![GitHub top language](http://img.shields.io/github/languages/top/InsectRobotics/CelestialCompassAnalysis) [![GitHub](http://img.shields.io/github/license/insectrobotics/celestialcompassanalysis)](./LICENSE) ![GitHub last commit](http://img.shields.io/github/last-commit/InsectRobotics/CelestialCompassAnalysis)
 
 Code that creates the analyses the data and figures of the article:
 
