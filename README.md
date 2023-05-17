@@ -19,10 +19,13 @@ python create_csv.py -t raw
 ```
 This will create a CSV file in the ```csv``` directory (named ```raw_dataset.csv```) that
 contains all the important data from the ```sardinia_data``` and ```south_africa_data```
-directories (that contain the raw ROS-bag files). The option ```-o [output_path]``` allows
-for a different output path. To create the pooled data from the above CSV file, run:
+directories (that contain the raw ROS-bag files). The size of these directories was almost 100 GB,
+so they were excluded from the dataset, but we include the code for reference. Providing the
+```raw_dataset.csv``` as input, should allow the following commands to work without problems.
+The option ```-o [output_path]``` allows for a different output path.
+To create the pooled data from the above CSV file, run:
 ```commandline
-python create_csv.py -t pooled
+python create_csv.py -t pooled -i DATASET_DIR/raw_dataset.csv
 ```
 which will create another CSV file in the ```csv``` directory (named ```pooled_dataset.csv```).
 Again the output path can be changed using the ```-o [output_path]``` option. This process
