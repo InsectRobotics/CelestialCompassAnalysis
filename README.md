@@ -1,4 +1,4 @@
-# Celestial Compass Analysis ![GitHub top language](http://img.shields.io/github/languages/top/refmitchell/skycompass) ![GitHub license](http://img.shields.io/github/license/refmitchell/skycompass) ![GitHub last commit](http://img.shields.io/github/last-commit/refmitchell/skycompass)
+# Celestial Compass Analysis ![GitHub top language](http://img.shields.io/github/languages/top/InsectRobotics/CelestialCompassAnalysis) ![GitHub license](http://img.shields.io/github/license/InsectRobotics/CelestialCompassAnalysis) ![GitHub last commit](http://img.shields.io/github/last-commit/InsectRobotics/CelestialCompassAnalysis)
 
 Code that creates the analyses the data and figures of the article:
 
@@ -73,7 +73,7 @@ or the file extension (supported extensions are ```png```, ```jpeg```, ```jpg```
 ## Report an issue
 
 If you have any issues installing or using the package, you can report it
-[here](https://github.com/refmitchell/skycompass/issues).
+[here](https://github.com/InsectRobotics/CelestialCompassAnalysis/issues).
 
 ## Author
 
