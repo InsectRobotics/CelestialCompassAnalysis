@@ -113,5 +113,5 @@ The code was written by [Evripidis Gkanias](https://evgkanias.github.io/) and Ro
 
 ## Copyright
 
-Copyright &copy; 2023, Insect robotics Group, Institute of Perception,
+Copyright &copy; 2023, Insect Robotics Group, Institute of Perception,
 Action and Behaviour, School of Informatics, the University of Edinburgh.
