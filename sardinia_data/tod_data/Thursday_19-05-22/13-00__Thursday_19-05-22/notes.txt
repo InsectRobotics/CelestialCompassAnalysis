@@ -1,5 +1,0 @@
-7.bag - Thought the correction stage had stalled, when I corrected
-manually the robot moved immediately.
-
-12.bag - Correction did stall this time but my correction was too much of a
-nudge. Doubt it's had a major effect but worth noting.
