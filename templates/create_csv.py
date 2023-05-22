@@ -18,7 +18,6 @@ default_nb_samples = 360
 
 data_base = os.path.abspath(os.path.join(os.getcwd(), '..'))
 csv_dir = os.path.abspath(os.path.join(os.getcwd(), '..', 'csv'))
-error_path = os.path.join(csv_dir, "error_data.csv")
 
 default_raw_file = 'raw_dataset.csv'
 default_pooled_file = 'pooled_dataset.csv'
@@ -632,7 +631,7 @@ def create_errors_csv(*data_dirs, pooled_df=None, out_file=None):
         error_df = pd.DataFrame(data_frame)
 
         if out_file is None:
-            out_file = error_path
+            out_file = os.path.join(csv_dir, default_error_file)
         elif not out_file.endswith('.csv'):
             out_file += '.csv'
         error_df.to_csv(out_file, index=False, float_format='%.4f')
