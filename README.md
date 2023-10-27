@@ -1,10 +1,10 @@
-# Celestial Compass Analysis ![GitHub top language](http://img.shields.io/github/languages/top/InsectRobotics/CelestialCompassAnalysis) [![GitHub](http://img.shields.io/github/license/insectrobotics/celestialcompassanalysis)](./LICENSE) ![GitHub last commit](http://img.shields.io/github/last-commit/InsectRobotics/CelestialCompassAnalysis)
+# Celestial Compass Analysis ![GitHub top language](http://img.shields.io/github/languages/top/InsectRobotics/CelestialCompassAnalysis) [![GitHub](http://img.shields.io/github/license/insectrobotics/celestialcompassanalysis)](./LICENSE) ![GitHub last commit](http://img.shields.io/github/last-commit/InsectRobotics/CelestialCompassAnalysis) [![DOI](https://zenodo.org/badge/641965643.svg)](https://zenodo.org/doi/10.5281/zenodo.8393055)
 
 Code that creates the analyses the data and figures of the article:
 
 **Gkanias, E., Mitchell, R., Stankiewicz, J., Khan, S.R., Mitra, S., and Webb, B. (2023).
-*Celestial compass design mimics the fan-like polarisation filter array of insect eyes***.
-*Nature Communications*.
+*Celestial compass sensor mimics the insect eye for navigation under cloudy and occluded skies***.
+*Communications Engineering*.
 
 ## Clone the repository
 Open a terminal, clone the project, and navigate to its working directory:
